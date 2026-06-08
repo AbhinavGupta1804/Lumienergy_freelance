@@ -1,0 +1,16 @@
+{
+  "name": "lumi-bill-upload",
+  "version": "1.0.0",
+  "description": "Lumi Energy — bill upload landing page (Vercel)",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "formidable": "^3.5.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "bun dev-server.js"
+  }
+}

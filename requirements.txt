@@ -1,0 +1,21 @@
+# FastAPI backend
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.1
+
+# HTTP client (ElevenLabs API)
+httpx>=0.27.0
+
+# Google Sheets API
+google-api-python-client>=2.150.0
+google-auth>=2.35.0
+
+# Natural-language date parsing ("tomorrow", "Tuesday evening", "next Friday")
+python-dateutil>=2.9.0
+dateparser>=1.2.0
+
+# Supabase Postgres (when DATABASE_BACKEND=supabase)
+supabase>=2.10.0

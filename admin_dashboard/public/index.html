@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lumi Energy — Call Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="brand">Lumi Energy</span>
+        <span class="brand-sub">Call Dashboard</span>
+      </div>
+      <div class="topbar-right">
+        <input type="search" id="search" class="search" placeholder="Search name, phone, address…" />
+        <select id="filter" class="filter-select">
+          <option value="all">All calls</option>
+          <option value="bill_uploaded">Bill uploaded</option>
+          <option value="no_bill">No bill</option>
+          <option value="sms_sent">SMS sent</option>
+          <option value="call_failed">Call failed</option>
+        </select>
+        <button type="button" class="btn-refresh" id="btn-refresh">Refresh</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="panel panel-list">
+        <div class="panel-head">
+          <h2>Calls</h2>
+          <span id="call-count" class="count-badge">0</span>
+        </div>
+        <div class="table-wrap">
+          <table class="calls-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Date</th>
+                <th>Duration</th>
+                <th>SMS</th>
+                <th>Bill</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="calls-body">
+              <tr><td colspan="7" class="empty-row">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel panel-detail" id="detail-panel">
+        <div class="detail-empty" id="detail-empty">
+          <p>Select a call to view details</p>
+        </div>
+        <div class="detail-content" id="detail-content" hidden>
+          <div class="panel-head">
+            <h2 id="detail-name">—</h2>
+            <span id="detail-status" class="status-pill">—</span>
+          </div>
+
+          <div class="detail-grid">
+            <div class="field"><label>Phone</label><span id="d-phone">—</span></div>
+            <div class="field"><label>Dialled to</label><span id="d-dial">—</span></div>
+            <div class="field"><label>Address</label><span id="d-address">—</span></div>
+            <div class="field"><label>Call date</label><span id="d-date">—</span></div>
+            <div class="field"><label>Duration</label><span id="d-duration">—</span></div>
+            <div class="field"><label>Call ended</label><span id="d-ended">—</span></div>
+            <div class="field"><label>SMS eligible</label><span id="d-sms-eligible">—</span></div>
+            <div class="field"><label>SMS sent</label><span id="d-sms-sent">—</span></div>
+            <div class="field"><label>Bill link used</label><span id="d-token-used">—</span></div>
+            <div class="field"><label>Call SID</label><span id="d-call-sid" class="mono">—</span></div>
+            <div class="field"><label>Conversation ID</label><span id="d-conv-id" class="mono">—</span></div>
+            <div class="field"><label>Termination</label><span id="d-termination">—</span></div>
+          </div>
+
+          <div class="detail-block">
+            <h3>Transcript summary</h3>
+            <p id="d-transcript" class="transcript">—</p>
+          </div>
+
+          <div class="detail-block">
+            <h3>Uploaded bills</h3>
+            <div id="bills-list" class="bills-list"></div>
+          </div>
+
+          <div class="detail-block" id="preview-block" hidden>
+            <div class="preview-head">
+              <h3>Preview</h3>
+              <button type="button" class="btn-link" id="btn-close-preview">Close</button>
+            </div>
+            <div id="preview-container" class="preview-container"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

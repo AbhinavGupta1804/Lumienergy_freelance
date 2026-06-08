@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/validate-token.js", "use": "@vercel/node" },
+    { "src": "api/upload.js", "use": "@vercel/node" },
+    { "src": "public/**", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/api/validate-token", "dest": "/api/validate-token.js" },
+    { "src": "/api/upload", "dest": "/api/upload.js" },
+    { "src": "/styles.css", "dest": "/public/styles.css" },
+    { "src": "/app.js", "dest": "/public/app.js" },
+    { "src": "/", "dest": "/public/index.html" },
+    { "src": "/(.*)", "dest": "/public/$1" }
+  ]
+}

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#FFFFFF" />
+  <title>Upload Your Energy Bill — Lumi Energy</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page">
+
+    <header class="header">
+      <div class="logo">
+        <svg width="32" height="32" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+          <circle cx="14" cy="14" r="14" fill="#2563EB"/>
+          <path d="M14 6 L18 14 H15 L16 22 L10 13 H13 L14 6Z" fill="white"/>
+        </svg>
+        <span class="logo-text">Lumi Energy</span>
+      </div>
+    </header>
+
+    <main class="main">
+
+      <section id="state-invalid" class="state-panel" hidden>
+        <div class="state-icon state-icon-warn">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </div>
+        <h1 class="state-title">This link isn't valid</h1>
+        <p class="state-desc">It may have expired or already been used. Contact your Lumi Energy representative for a new link.</p>
+      </section>
+
+      <section id="state-form" class="state-panel state-form" hidden>
+        <div class="form-intro">
+          <h1 class="state-title">Upload your energy bill</h1>
+          <p class="state-desc">Share a photo or PDF of your most recent bill so we can prepare your savings estimate.</p>
+        </div>
+
+        <div class="trust-strip">
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Secure
+          </span>
+          <span class="trust-dot" aria-hidden="true"></span>
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+            </svg>
+            Private
+          </span>
+        </div>
+
+        <form id="upload-form" class="upload-form" novalidate>
+
+          <div class="file-preview" id="file-preview" hidden>
+            <div class="file-preview-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/>
+                <polyline points="13 2 13 9 20 9"/>
+              </svg>
+            </div>
+            <div class="file-preview-info">
+              <span class="file-preview-label">Ready to submit</span>
+              <span id="preview-name" class="file-preview-name"></span>
+            </div>
+            <button type="button" class="file-preview-change" id="preview-remove">Change</button>
+          </div>
+
+          <div class="upload-options" id="upload-options">
+            <button type="button" class="option-btn option-primary" id="btn-camera">
+              <span class="option-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+              </span>
+              <span class="option-text">
+                <strong>Take a photo</strong>
+                <small>Use your camera — best for paper bills</small>
+              </span>
+              <svg class="option-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+
+            <button type="button" class="option-btn" id="btn-file">
+              <span class="option-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/>
+                  <circle cx="8.5" cy="8.5" r="1.5"/>
+                  <polyline points="21 15 16 10 5 21"/>
+                </svg>
+              </span>
+              <span class="option-text">
+                <strong>Choose from gallery</strong>
+                <small>Photo or PDF, up to 20 MB</small>
+              </span>
+              <svg class="option-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+
+            <div class="dropzone-desktop" id="dropzone" tabindex="0" role="button" aria-label="Upload bill file">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
+                <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/>
+              </svg>
+              <p>Or drag &amp; drop your file here</p>
+            </div>
+          </div>
+
+          <input type="file" id="file-input" accept="image/*,application/pdf,.pdf" hidden />
+
+          <p id="file-error" class="field-error" hidden></p>
+
+          <div class="submit-bar">
+            <button type="submit" class="btn-submit" id="btn-submit" disabled>
+              Submit bill
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section id="state-uploading" class="state-panel" hidden>
+        <div class="spinner" aria-label="Uploading..."></div>
+        <h1 class="state-title">Uploading your bill…</h1>
+        <p class="state-desc">Please keep this page open. This usually takes just a few seconds.</p>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+      </section>
+
+      <section id="state-success" class="state-panel" hidden>
+        <div class="state-icon state-icon-success">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+        </div>
+        <h1 class="state-title">Bill received</h1>
+        <p class="state-desc">Thank you! Our team will review your bill and follow up with your personalised savings estimate. You can close this page now.</p>
+      </section>
+
+      <section id="state-error" class="state-panel" hidden>
+        <div class="state-icon state-icon-warn">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </div>
+        <h1 class="state-title">Upload failed</h1>
+        <p class="state-desc" id="error-message">Something went wrong. Please try again.</p>
+        <button type="button" class="btn-secondary" id="btn-retry">Try again</button>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      <p>Your information is encrypted and never shared with third parties.</p>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
