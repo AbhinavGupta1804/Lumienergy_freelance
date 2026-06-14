@@ -11,8 +11,8 @@ When an outbound call is created (REST API or TwiML), you can set:
 After the call ends, Twilio POSTs form fields (CallSid, CallStatus, To, From, …)
 to that URL. Your app returns 200 OK quickly; Twilio may retry on failure.
 
-Post-call SMS in this project is triggered when CallStatus=completed and the
-agent previously called mark_bill_sms_ready (sms_eligible=1 in SQLite).
+Post-call SMS is triggered automatically when CallStatus=completed.
+No eligibility flag required — SMS is sent to all customers after call completion.
 """
 
 import base64

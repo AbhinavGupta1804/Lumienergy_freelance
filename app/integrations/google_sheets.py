@@ -2,7 +2,7 @@
 Google Sheets integration — reads lead rows via the Sheets API v4.
 
 Uses a Google Cloud service account JSON file (no browser automation).
-Expected columns (row 1): first_name | last name | address | phone_no  (A:D)
+Row 1 must include headers; lead fields are mapped by name (see settings SHEETS_COL_*).
 """
 
 import hashlib
@@ -14,11 +14,32 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from app.config import get_settings
+from app.integrations.sheet_columns import (
+    build_header_index,
+    extract_lead_fields,
+    validate_headers,
+)
 from app.models.lead import Lead
 
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+# Read through column Z so extra form fields (email, zip, etc.) are included.
+_SHEET_DATA_RANGE_SUFFIX = "A:Z"
+
+
+def build_row_key(
+    row_number: int,
+    first_name: str,
+    last_name: str,
+    address: str,
+    phone_no: str,
+) -> str:
+    """Stable key: row number + hash of content (detects edits on same row)."""
+    payload = f"{row_number}|{first_name}|{last_name}|{address}|{phone_no}".strip().lower()
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    return f"row_{row_number}_{digest}"
 
 
 class GoogleSheetsClient:
@@ -40,10 +61,8 @@ class GoogleSheetsClient:
         self._worksheet_name = settings.google_sheets_worksheet_name
 
     def _sheet_range(self) -> str:
-        # Always quote the tab name — required for spaces and safest for all names.
-        # Example: 'Sheet1'!A:D
         name = self._worksheet_name.strip().replace("'", "''")
-        return f"'{name}'!A:D"
+        return f"'{name}'!{_SHEET_DATA_RANGE_SUFFIX}"
 
     def _list_worksheet_titles(self) -> list[str]:
         """Return tab names in the spreadsheet (for error messages)."""
@@ -53,19 +72,6 @@ class GoogleSheetsClient:
             .execute()
         )
         return [s["properties"]["title"] for s in meta.get("sheets", [])]
-
-    @staticmethod
-    def _row_key(
-        row_number: int,
-        first_name: str,
-        last_name: str,
-        address: str,
-        phone_no: str,
-    ) -> str:
-        """Stable key: row number + hash of content (detects edits on same row)."""
-        payload = f"{row_number}|{first_name}|{last_name}|{address}|{phone_no}".strip().lower()
-        digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
-        return f"row_{row_number}_{digest}"
 
     def fetch_leads(self) -> list[Lead]:
         """
@@ -95,20 +101,30 @@ class GoogleSheetsClient:
             logger.debug("Sheet is empty")
             return []
 
-        # Columns A–D: first_name | last name | address | phone_no
+        headers = [str(h) for h in values[0]]
+        header_index = build_header_index(headers)
+        missing = validate_headers(header_index)
+        if missing:
+            raise ValueError(
+                f"Sheet is missing required column header(s): {', '.join(missing)}. "
+                f"Found headers: {headers}"
+            )
+
         data_rows = values[1:]
         leads: list[Lead] = []
         now = datetime.now(timezone.utc)
 
         for idx, row in enumerate(data_rows, start=2):
-            cells = (row + ["", "", "", ""])[:4]
-            first_name, last_name, address, phone_no = [str(c).strip() for c in cells]
+            fields = extract_lead_fields(row, header_index)
+            first_name = fields["first_name"]
+            last_name = fields["last_name"]
+            address = fields["address"]
+            phone_no = fields["phone_no"]
 
-            # Skip completely empty rows
             if not first_name and not last_name and not address and not phone_no:
                 continue
 
-            row_key = self._row_key(idx, first_name, last_name, address, phone_no)
+            row_key = build_row_key(idx, first_name, last_name, address, phone_no)
             leads.append(
                 Lead(
                     row_number=idx,

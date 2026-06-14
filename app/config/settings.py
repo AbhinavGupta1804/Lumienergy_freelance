@@ -33,7 +33,13 @@ class Settings(BaseSettings):
     google_sheets_spreadsheet_id: str = ""
     google_sheets_worksheet_name: str = "Sheet1"
     google_service_account_json: str = ""  # Path to service account JSON file
-    sheets_poll_interval_seconds: int = 20  # Poll every 15–30s (default 20)
+    # Shared secret for Google Apps Script → POST /webhooks/sheets/new-lead
+    sheets_webhook_secret: str = ""
+    # Column headers in row 1 (Landing page forms layout)
+    sheets_col_first_name: str = "First Name"
+    sheets_col_last_name: str = "Last Name"
+    sheets_col_address: str = "Street Address"
+    sheets_col_phone: str = "Phone"
 
     # --- Testing overrides ---
     # When true, ignore phone_no column and always dial TEST_CALL_NUMBER
@@ -62,12 +68,8 @@ class Settings(BaseSettings):
     sms_bill_upload_link: str = ""
     # Optional full SMS text; use {link} for SMS_BILL_UPLOAD_LINK
     sms_message_body: str = ""
-    # Only send after agent called mark_bill_sms_ready (Step 6b)
-    sms_require_eligible: bool = True
     # Validate X-Twilio-Signature on status callbacks (recommended in production)
     twilio_validate_webhook_signatures: bool = True
-    # Shared secret for ElevenLabs mark_bill_sms_ready tool (same pattern as scheduling)
-    sms_tool_api_key: str = ""
 
     # --- Cal.com scheduling (proxy used by ElevenLabs get_available_slots tool) ---
     cal_api_key: str = ""  # Cal.com API key (Bearer token)

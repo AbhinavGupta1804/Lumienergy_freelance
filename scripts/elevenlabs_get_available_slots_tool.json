@@ -1,0 +1,73 @@
+{
+  "type": "webhook",
+  "name": "get_available_slots",
+  "description": "Look up real appointment slots for ONE day. Call this tool every time you need slots for a specific day or period — one call per day_query. NEVER invent times. day_query: 'tomorrow', 'day after tomorrow', or 'two days after tomorrow'. time_period: 'morning', 'afternoon', 'evening', or 'any' (only with time_preference). time_preference: only after the customer rejects the first two slots — pass their time frame verbatim; leave empty on the first morning/afternoon/evening offer. Read spoken_offer to the customer (includes weekday + date + two times, e.g. 'Monday June 15 — 8 AM or 10 AM'). If has_slots is false but has_any_slots is true, that period is empty — try another period on the same day or ask a custom time_preference. If has_any_slots is false, use next_day_query for the next tool call (max 3 days). If scheduling_window_exhausted is true, stop offering slots and use the handoff script. For book_slot, use the exact start from the chosen slot in slots.",
+  "disable_interruptions": false,
+  "force_pre_tool_speech": false,
+  "pre_tool_speech": "auto",
+  "tool_call_sound": "typing",
+  "tool_call_sound_behavior": "always",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://maya-unanemic-honey.ngrok-free.dev/scheduling/slots",
+    "method": "GET",
+    "path_params_schema": [],
+    "query_params_schema": [
+      {
+        "id": "day_query",
+        "type": "string",
+        "value_type": "llm_prompt",
+        "description": "Day in the customer's words. Start with 'tomorrow'. When has_any_slots is false, call again with next_day_query from the previous response ('day after tomorrow', then 'two days after tomorrow'). Do not go beyond three days from today.",
+        "dynamic_variable": "",
+        "constant_value": "",
+        "enum": null,
+        "is_system_provided": false,
+        "required": true
+      },
+      {
+        "id": "time_period",
+        "type": "string",
+        "value_type": "llm_prompt",
+        "description": "morning, afternoon, or evening when the customer picks a block. Use 'any' only when calling with a custom time_preference.",
+        "dynamic_variable": "",
+        "constant_value": "",
+        "enum": [
+          "any",
+          "morning",
+          "afternoon",
+          "evening"
+        ],
+        "is_system_provided": false,
+        "required": true
+      },
+      {
+        "id": "time_preference",
+        "type": "string",
+        "value_type": "llm_prompt",
+        "description": "Customer's preferred time frame AFTER they reject the first two slots. Pass their exact wording: 'around 2', 'between 10 and 12', 'after 3 PM', 'before noon', 'early afternoon', etc. Leave empty when first offering morning/afternoon/evening slots.",
+        "dynamic_variable": "",
+        "constant_value": "",
+        "enum": null,
+        "is_system_provided": false,
+        "required": false
+      }
+    ],
+    "request_body_schema": null,
+    "request_headers": [
+      {
+        "type": "value",
+        "name": "X-Tool-Api-Key",
+        "value": "lumi_tool_secret_change_me"
+      }
+    ],
+    "content_type": "application/json",
+    "auth_connection": null
+  },
+  "assignments": [],
+  "response_timeout_secs": 20,
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  },
+  "response_mocks": []
+}

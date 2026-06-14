@@ -1,0 +1,120 @@
+{
+  "type": "webhook",
+  "name": "book_slot",
+  "description": "Never invent timestamps. Use the exact selected slot timestamp from get_available_slots. For attendee.phoneNumber always use lead phone from dynamic variable phone_no in E.164 format. Never invent or omit the phone number.",
+  "disable_interruptions": false,
+  "force_pre_tool_speech": false,
+  "pre_tool_speech": "auto",
+  "tool_call_sound": "typing",
+  "tool_call_sound_behavior": "always",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://maya-unanemic-honey.ngrok-free.dev/scheduling/book",
+    "method": "POST",
+    "path_params_schema": [],
+    "query_params_schema": [],
+    "request_body_schema": {
+      "id": "body",
+      "type": "object",
+      "description": "Create a booking for an in-person consultation appointment.",
+      "properties": [
+        {
+          "id": "eventTypeId",
+          "type": "number",
+          "value_type": "constant",
+          "description": "",
+          "dynamic_variable": "",
+          "constant_value": "5794190",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "start",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "The EXACT slot timestamp returned by get_available_slots tool. Never generate or modify timestamps manually.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "attendee",
+          "type": "object",
+          "description": "Lead information for the in-person appointment. Must include phoneNumber",
+          "properties": [
+            {
+              "id": "name",
+              "type": "string",
+              "value_type": "dynamic_variable",
+              "description": "",
+              "dynamic_variable": "first_name",
+              "constant_value": "",
+              "enum": null,
+              "is_system_provided": false,
+              "required": true
+            },
+            {
+              "id": "timeZone",
+              "type": "string",
+              "value_type": "constant",
+              "description": "",
+              "dynamic_variable": "",
+              "constant_value": "America/Phoenix",
+              "enum": null,
+              "is_system_provided": false,
+              "required": true
+            },
+            {
+              "id": "phoneNumber",
+              "type": "string",
+              "value_type": "dynamic_variable",
+              "description": "",
+              "dynamic_variable": "phone_no",
+              "constant_value": "",
+              "enum": null,
+              "is_system_provided": false,
+              "required": true
+            }
+          ],
+          "required": true,
+          "value_type": "llm_prompt"
+        }
+      ],
+      "required": false,
+      "value_type": "llm_prompt"
+    },
+    "request_headers": [
+      {
+        "type": "value",
+        "name": "X-Tool-Api-Key",
+        "value": "lumi_tool_secret_change_me"
+      },
+      {
+        "type": "value",
+        "name": "Content-Type",
+        "value": "application/json"
+      }
+    ],
+    "content_type": "application/json",
+    "auth_connection": null
+  },
+  "assignments": [],
+  "response_timeout_secs": 20,
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {
+      "first_name": {
+        "type": "string_literal",
+        "value": ""
+      },
+      "phone_no": {
+        "type": "string_literal",
+        "value": ""
+      }
+    }
+  },
+  "response_mocks": []
+}

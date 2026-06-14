@@ -1,6 +1,6 @@
 # Lumi Outbound AI Caller
 
-End-to-end workflow: **Google Sheets** (leads) → **FastAPI** (polling) → **ElevenLabs Conversational AI** (outbound call via **Twilio**).
+End-to-end workflow: **Google Sheets** (leads) → **Apps Script webhook** → **FastAPI** → **ElevenLabs Conversational AI** (outbound call via **Twilio**).
 
 The AI conversation runs entirely on your **existing ElevenLabs agent** — no custom OpenAI realtime streaming.
 
@@ -11,14 +11,14 @@ The AI conversation runs entirely on your **existing ElevenLabs agent** — no c
 | Step | Component | What happens |
 |------|-----------|--------------|
 | 1 | Google Sheet | You add a row: `name`, `address`, `phone_no` |
-| 2 | FastAPI poller | Every 15–30s, reads new rows via Sheets API |
+| 2 | Apps Script webhook | POSTs new row instantly to FastAPI |
 | 3 | Dedup (SQLite) | Skips rows already called (`data/processed_leads.db`) |
 | 4 | ElevenLabs API | `POST /v1/convai/twilio/outbound-call` starts Twilio outbound call |
 | 5 | ElevenLabs agent | Handles voice; receives `first_name`, `address`, `phone_no` as dynamic variables |
 
 ```mermaid
 flowchart LR
-  GS[Google Sheet] -->|poll 20s| API[FastAPI]
+  GS[Google Sheet] -->|webhook| API[FastAPI]
   API -->|new row| EL[ElevenLabs Outbound API]
   EL --> TW[Twilio]
   TW --> Phone[Customer Phone]
@@ -31,7 +31,7 @@ flowchart LR
 
 ```
 app/
-  main.py                 # FastAPI app + lifespan (starts poller)
+  main.py                 # FastAPI app + lifespan
   config/settings.py      # Environment variables
   models/lead.py          # Lead dataclass
   integrations/
@@ -39,13 +39,13 @@ app/
     elevenlabs.py         # Outbound call API
     twilio_webhooks.py    # Optional status logging
   services/
-    sheets_poller.py      # Background poll loop
-    lead_processor.py     # Sheet → new leads
+    lead_processor.py     # Webhook lead → call
     call_orchestrator.py  # Lead → ElevenLabs call
   routes/
     health.py             # /health, /status
     webhooks.py           # /webhooks/twilio/* (optional)
-    calls.py              # Manual trigger endpoints
+    sheets_webhooks.py    # POST /webhooks/sheets/new-lead
+    calls.py              # Manual trigger-row endpoint
   utils/
     dedup_store.py        # SQLite deduplication
     retry.py              # Exponential backoff
@@ -78,7 +78,7 @@ credentials/              # Google service account JSON (gitignored)
 
 ### Post-call SMS (required: ElevenLabs webhook)
 
-**ElevenLabs outbound calls do not send Twilio Status Callbacks to your server** — Twilio only notifies ElevenLabs. That is why Twilio Messaging logs stay empty even when `mark_bill_sms_ready` succeeds.
+**ElevenLabs outbound calls do not send Twilio Status Callbacks to your server** — Twilio only notifies ElevenLabs. SMS is sent automatically to all customers after call completion.
 
 1. Start ngrok: `ngrok http 8000`
 2. Set `PUBLIC_BASE_URL=https://YOUR-SUBDOMAIN.ngrok-free.app` in `.env`
@@ -150,13 +150,13 @@ xi-api-key: YOUR_KEY
 
 ### Sheet format
 
-Row 1 (headers):
+Row 1 must include these headers (other columns are fine — e.g. Timestamp, Email, Zip):
 
-| first_name | last name | address | phone_no |
-|------------|-----------|---------|----------|
-| john | cina | 123 main street | 919752713547 |
+| First Name | Last Name | Street Address | Phone | … |
+|------------|-----------|----------------|-------|---|
+| John | Doe | 123 Main St | 919752713547 | … |
 
-For testing, keep **one data row**. `phone_no` is ignored when `TEST_MODE=true`; calls always go to `+919752713547`.
+Extra form fields (Email, Zip, Property Type, etc.) are ignored for calling. `phone_no` is ignored when `TEST_MODE=true`; calls always go to `TEST_CALL_NUMBER`.
 
 ### Google Cloud
 
@@ -168,6 +168,26 @@ For testing, keep **one data row**. `phone_no` is ignored when `TEST_MODE=true`;
 6. Copy spreadsheet ID from URL:
    `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`
    → `GOOGLE_SHEETS_SPREADSHEET_ID`.
+
+### Apps Script webhook (instant calls)
+
+When a row is added, Google Sheets cannot call your server directly — a small script in the sheet POSTs to FastAPI.
+
+1. Set a strong secret in `.env`:
+   ```env
+   SHEETS_WEBHOOK_SECRET=your-long-random-secret
+   ```
+2. Ensure `PUBLIC_BASE_URL` is your ngrok or production URL (must be HTTPS).
+3. Open the spreadsheet → **Extensions** → **Apps Script**.
+4. Paste `scripts/sheets_webhook.gs` and set:
+   - `WEBHOOK_URL` → `{PUBLIC_BASE_URL}/webhooks/sheets/new-lead`
+   - `WEBHOOK_SECRET` → same as `SHEETS_WEBHOOK_SECRET`
+   - `SHEET_NAME` → same as `GOOGLE_SHEETS_WORKSHEET_NAME`
+5. If the sheet **already has lead rows**, run **`initializeLastProcessedRow`** once first (skips existing rows).
+6. Run **`setupSheetsWebhookTrigger`** once (authorize when prompted).
+7. Add a test row — the call should start within a few seconds.
+
+To re-process rows after clearing dedup, reset the script cursor: Apps Script → **Project Settings** → **Script properties** → delete `lastProcessedRow`, or run `processNewRows` manually.
 
 ---
 
@@ -189,6 +209,8 @@ copy .env.example .env
 | `ELEVENLABS_AGENT_PHONE_NUMBER_ID` | ElevenLabs → agent → Phone Numbers |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | Sheet URL |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to JSON file |
+| `SHEETS_WEBHOOK_SECRET` | Random secret (match Apps Script `WEBHOOK_SECRET`) |
+| `PUBLIC_BASE_URL` | ngrok/production URL for Sheets + ElevenLabs webhooks |
 
 ### Supabase (cloud Postgres, tables only)
 
@@ -230,11 +252,11 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - Status (processed leads): http://localhost:8000/status  
 - API docs: http://localhost:8000/docs  
 
-The background poller starts automatically and checks the sheet every `SHEETS_POLL_INTERVAL_SECONDS` (default 20).
+Leads arrive via the Google Apps Script webhook (`POST /webhooks/sheets/new-lead`). `GET /status` shows whether `SHEETS_WEBHOOK_SECRET` is configured.
 
-### Expose with ngrok (optional)
+### Expose with ngrok (required for Sheets webhook)
 
-Useful for Twilio webhook debugging or future inbound features:
+The Apps Script must reach your server over HTTPS:
 
 ```powershell
 ngrok http 8000
@@ -252,16 +274,19 @@ Restart uvicorn after updating `.env`.
 
 ## 6. End-to-end test
 
-1. Ensure `.env` is complete and `TEST_MODE=true`.
+1. Ensure `.env` is complete, `PUBLIC_BASE_URL` is set, and Apps Script webhook is installed.
 2. Add one row to the sheet (name + address; phone can be dummy).
-3. Wait ~20 seconds **or** trigger manually:
+3. The call should start within a few seconds. Or trigger manually (reads sheet via service account):
 
 ```powershell
-# Force one poll cycle
-curl -X POST http://localhost:8000/calls/trigger-poll
-
-# Or call a specific row (row 2 = first data row)
+# Call a specific row (row 2 = first data row)
 curl -X POST http://localhost:8000/calls/trigger-row -H "Content-Type: application/json" -d "{\"row_number\": 2}"
+
+# Or POST the same payload as Apps Script
+curl -X POST http://localhost:8000/webhooks/sheets/new-lead `
+  -H "Content-Type: application/json" `
+  -H "X-Sheets-Webhook-Secret: YOUR_SECRET" `
+  -d "{\"row_number\": 2, \"first_name\": \"john\", \"last_name\": \"cina\", \"address\": \"123 main\", \"phone_no\": \"919752713547\"}"
 ```
 
 4. Your phone (`+919752713547`) should ring; the ElevenLabs agent should know `first_name`, `address`, and `phone_no`.
@@ -275,7 +300,7 @@ Delete the row from SQLite or remove `data/processed_leads.db`, then trigger aga
 
 ## Deduplication
 
-Each sheet row gets a stable `row_key` (row number + content hash). After a successful or failed call attempt, the row is stored in SQLite so the poller does not call again.
+Each sheet row gets a stable `row_key` (row number + content hash). After a successful or failed call attempt, the row is stored in the dedup store so it is not called again.
 
 ---
 
@@ -286,7 +311,7 @@ Each sheet row gets a stable `row_key` (row number + content hash). After a succ
 | Google 403 / permission denied | Share sheet with service account email |
 | ElevenLabs 422 | Check `agent_id`, `agent_phone_number_id`, E.164 `to_number` |
 | Twilio trial won't call | Verify destination number in Twilio Console |
-| No new calls on new row | Check `/status`; row may already be in dedup DB |
+| No new calls on new row | Check Apps Script **Executions** log; verify ngrok URL + `SHEETS_WEBHOOK_SECRET`; row may already be in dedup DB |
 | Agent missing variables | Add `{{first_name}}`, `{{address}}`, `{{phone_no}}` in ElevenLabs agent config |
 
 ---
@@ -294,7 +319,7 @@ Each sheet row gets a stable `row_key` (row number + content hash). After a succ
 ## Production notes (later)
 
 - Set `TEST_MODE=false` to use `phone_no` from the sheet.
-- Increase polling interval or move to Apps Script push + signed webhook.
+- Rotate `SHEETS_WEBHOOK_SECRET` periodically; update Apps Script to match.
 - Run behind a process manager (systemd, Docker, cloud Run).
 - Rotate API keys; never commit `.env` or `credentials/*.json`.
 

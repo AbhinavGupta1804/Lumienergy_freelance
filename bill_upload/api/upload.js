@@ -13,8 +13,8 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
-const formidable = require('formidable');
-const fs = require('fs');
+const Busboy = require('busboy');
+const { Readable } = require('stream');
 const path = require('path');
 const { randomUUID } = require('crypto');
 
@@ -57,16 +57,83 @@ async function parseForm(req) {
     };
   }
 
-  // Vercel / Node — parse multipart stream with formidable.
+  // Vercel / Node — buffer body then parse with busboy (formidable breaks on Vercel).
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('multipart/form-data')) {
+    const err = new Error('Expected multipart form data');
+    err.code = 'NO_FILE';
+    throw err;
+  }
+
+  let body;
+  if (Buffer.isBuffer(req.body)) {
+    body = req.body;
+  } else if (typeof req.body === 'string') {
+    body = Buffer.from(req.body, 'binary');
+  } else {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    body = Buffer.concat(chunks);
+  }
+
+  if (!body.length) {
+    const err = new Error('No file received');
+    err.code = 'NO_FILE';
+    throw err;
+  }
+
   return new Promise((resolve, reject) => {
-    const form = formidable({
-      maxFileSize: MAX_SIZE_BYTES,
-      keepExtensions: true,
+    const fields = {};
+    const files = {};
+    const pending = [];
+
+    const busboy = Busboy({
+      headers: req.headers,
+      limits: { fileSize: MAX_SIZE_BYTES },
     });
-    form.parse(req, (err, fields, files) => {
-      if (err) return reject(err);
-      resolve({ fields, files });
+
+    busboy.on('field', (name, value) => {
+      fields[name] = value;
     });
+
+    busboy.on('file', (name, stream, info) => {
+      const chunks = [];
+      pending.push(
+        new Promise((res, rej) => {
+          stream.on('data', (chunk) => chunks.push(chunk));
+          stream.on('limit', () => {
+            const err = new Error('File too large');
+            err.code = 1009;
+            rej(err);
+          });
+          stream.on('close', () => {
+            const buffer = Buffer.concat(chunks);
+            files[name] = {
+              _buffer: buffer,
+              originalFilename: info.filename,
+              mimetype: info.mimeType || 'application/octet-stream',
+              size: buffer.length,
+            };
+            res();
+          });
+          stream.on('error', rej);
+        }),
+      );
+    });
+
+    busboy.on('error', reject);
+    busboy.on('close', async () => {
+      try {
+        await Promise.all(pending);
+        resolve({ fields, files });
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    Readable.from(body).pipe(busboy);
   });
 }
 
@@ -117,7 +184,7 @@ module.exports = async function handler(req, res) {
   // ── 3. Upload to Supabase Storage ────────────────────────────
   const ext          = path.extname(file.originalFilename || file.newFilename || '').toLowerCase() || '';
   const safeName     = `${lead.row_key}/${randomUUID()}${ext}`;
-  const fileBuffer  = file._buffer ?? fs.readFileSync(file.filepath);
+  const fileBuffer  = file._buffer;
   const contentType = file.mimetype || 'application/octet-stream';
 
   const { error: storageErr } = await supabase.storage
@@ -126,10 +193,6 @@ module.exports = async function handler(req, res) {
       contentType,
       upsert: false,
     });
-
-  if (file.filepath) {
-    fs.unlink(file.filepath, () => {});
-  }
 
   if (storageErr) {
     console.error('upload: storage error:', storageErr.message);
@@ -166,6 +229,3 @@ module.exports = async function handler(req, res) {
 
   return res.status(200).json({ ok: true });
 };
-
-// Vercel: disable default body parser so formidable can read multipart uploads.
-module.exports.config = { api: { bodyParser: false } };

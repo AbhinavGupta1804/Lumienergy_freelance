@@ -19,7 +19,7 @@ _PROCESSED_LEADS_COLUMNS = (
     "row_key, row_number, name, address, call_sid, conversation_id, "
     "phone_no, dial_to, sms_eligible, sms_sent, status, processed_at, "
     "call_duration_secs, call_successful, transcript_summary, "
-    "termination_reason, call_ended_at"
+    "termination_reason, call_ended_at, cal_booking_uid, google_event_uid"
 )
 
 
@@ -37,6 +37,14 @@ class _DedupBackend(Protocol):
     def mark_sms_sent(self, call_sid: str) -> None: ...
     def set_upload_token(self, call_sid: str, token: str) -> None: ...
     def update_post_call_analytics(self, **kwargs: Any) -> bool: ...
+    def set_cal_booking(
+        self,
+        *,
+        conversation_id: str,
+        cal_booking_uid: str,
+        google_event_uid: str | None = None,
+    ) -> bool: ...
+    def get_latest_called_by_phone(self, phone: str) -> dict | None: ...
     def list_processed(self, limit: int = 50) -> list[dict]: ...
 
 
@@ -103,6 +111,8 @@ class SqliteDedupBackend:
             "call_ended_at": "TEXT",
             "upload_token": "TEXT",
             "upload_token_used": "INTEGER NOT NULL DEFAULT 0",
+            "cal_booking_uid": "TEXT",
+            "google_event_uid": "TEXT",
         }
         for col, typedef in additions.items():
             if col not in existing:
@@ -319,6 +329,50 @@ class SqliteDedupBackend:
             )
         return updated
 
+    def set_cal_booking(
+        self,
+        *,
+        conversation_id: str,
+        cal_booking_uid: str,
+        google_event_uid: str | None = None,
+    ) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET cal_booking_uid = ?, google_event_uid = ?
+                WHERE conversation_id = ?
+                """,
+                (cal_booking_uid, google_event_uid, conversation_id),
+            )
+            conn.commit()
+            updated = cur.rowcount > 0
+        if updated:
+            logger.info(
+                "Stored Cal booking conversation_id=%s uid=%s",
+                conversation_id,
+                cal_booking_uid,
+            )
+        return updated
+
+    def get_latest_called_by_phone(self, phone: str) -> dict | None:
+        digits = "".join(c for c in phone if c.isdigit())
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM processed_leads
+                WHERE status = 'called'
+                  AND (
+                    REPLACE(REPLACE(REPLACE(phone_no, '+', ''), ' ', ''), '-', '') = ?
+                    OR REPLACE(REPLACE(REPLACE(dial_to, '+', ''), ' ', ''), '-', '') = ?
+                  )
+                ORDER BY processed_at DESC
+                LIMIT 1
+                """,
+                (digits, digits),
+            ).fetchall()
+        return _row_to_dict(rows[0]) if rows else None
+
     def list_processed(self, limit: int = 50) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -520,6 +574,48 @@ class SupabaseDedupBackend:
             )
         return updated
 
+    def set_cal_booking(
+        self,
+        *,
+        conversation_id: str,
+        cal_booking_uid: str,
+        google_event_uid: str | None = None,
+    ) -> bool:
+        payload = {
+            "cal_booking_uid": cal_booking_uid,
+            "google_event_uid": google_event_uid,
+        }
+        resp = (
+            self._table.update(payload)
+            .eq("conversation_id", conversation_id)
+            .execute()
+        )
+        updated = bool(resp.data)
+        if updated:
+            logger.info(
+                "Stored Cal booking conversation_id=%s uid=%s",
+                conversation_id,
+                cal_booking_uid,
+            )
+        return updated
+
+    def get_latest_called_by_phone(self, phone: str) -> dict | None:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return None
+        for col in ("phone_no", "dial_to"):
+            resp = (
+                self._table.select("*")
+                .eq("status", "called")
+                .like(col, f"%{digits}%")
+                .order("processed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                return resp.data[0]
+        return None
+
     def list_processed(self, limit: int = 50) -> list[dict]:
         resp = (
             self._table.select(
@@ -588,6 +684,22 @@ class DedupStore:
 
     def update_post_call_analytics(self, **kwargs: Any) -> bool:
         return self._impl.update_post_call_analytics(**kwargs)
+
+    def set_cal_booking(
+        self,
+        *,
+        conversation_id: str,
+        cal_booking_uid: str,
+        google_event_uid: str | None = None,
+    ) -> bool:
+        return self._impl.set_cal_booking(
+            conversation_id=conversation_id,
+            cal_booking_uid=cal_booking_uid,
+            google_event_uid=google_event_uid,
+        )
+
+    def get_latest_called_by_phone(self, phone: str) -> dict | None:
+        return self._impl.get_latest_called_by_phone(phone)
 
     def list_processed(self, limit: int = 50) -> list[dict]:
         return self._impl.list_processed(limit)

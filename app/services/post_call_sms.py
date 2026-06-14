@@ -1,6 +1,8 @@
 """
 Post-call SMS after voice calls end.
 
+Sends SMS to all customers after their call completes, with no conditions.
+
 Primary trigger (ElevenLabs outbound):
   POST /webhooks/elevenlabs/post-call — configure in ElevenLabs dashboard.
   Twilio Status Callbacks on EL-initiated calls go to ElevenLabs, not your server.
@@ -8,7 +10,7 @@ Primary trigger (ElevenLabs outbound):
 Secondary trigger (if you place calls via Twilio REST directly):
   POST /webhooks/twilio/status — CallStatus=completed.
 
-During the call, mark_bill_sms_ready (Step 6b) sets sms_eligible=1.
+No eligibility flag required — SMS is sent automatically for all completed calls.
 """
 
 import logging
@@ -27,51 +29,13 @@ class PostCallSmsService:
     def __init__(self, store: DedupStore) -> None:
         self._store = store
 
-    def mark_ready_by_phone(
-        self,
-        phone_no: str,
-        *,
-        conversation_id: str | None = None,
-    ) -> dict:
-        """
-        Called by ElevenLabs tool when conversation reaches Step 6b.
-        Prefer conversation_id so we flag the live call, not another call to the same number.
-        """
-        normalized = normalize_e164(phone_no)
-        if not normalized:
-            return {"ok": False, "reason": "invalid_phone"}
 
-        updated = self._store.mark_sms_eligible(
-            normalized,
-            conversation_id=conversation_id or None,
-        )
-        if not updated:
-            logger.warning(
-                "mark_bill_sms_ready: no active call for %s conversation_id=%s",
-                normalized,
-                conversation_id,
-            )
-            return {"ok": False, "reason": "no_matching_call"}
-
-        logger.info(
-            "SMS eligible flagged customer_phone=%s conversation_id=%s row_key=%s call_sid=%s",
-            normalized,
-            updated.get("conversation_id"),
-            updated.get("row_key"),
-            updated.get("call_sid"),
-        )
-        return {
-            "ok": True,
-            "row_key": updated.get("row_key"),
-            "call_sid": updated.get("call_sid"),
-            "conversation_id": updated.get("conversation_id"),
-        }
 
     async def on_status_callback(self, callback: dict[str, str]) -> dict:
         """
         Handle Twilio Status Callback POST (all CallStatus values).
 
-        Only sends SMS when CallStatus=completed and sms_eligible=1.
+        Sends SMS automatically when CallStatus=completed.
         """
         call_sid = callback.get("call_sid", "")
         status = (callback.get("status") or "").lower()
@@ -113,6 +77,7 @@ class PostCallSmsService:
         ElevenLabs post-call webhook — conversation finished.
 
         Looks up call_sid by conversation_id stored when the outbound call started.
+        Always sends SMS, no eligibility check required.
         """
         row = self._store.get_by_conversation_id(conversation_id)
         if not row:
@@ -122,33 +87,13 @@ class PostCallSmsService:
             )
             return {"action": "skipped", "reason": "unknown_conversation_id"}
 
-        send_row = row
-        if not row.get("sms_eligible"):
-            phone = row.get("dial_to") or row.get("phone_no") or ""
-            pending = self._store.get_pending_sms_eligible_by_phone(phone)
-            if pending:
-                logger.info(
-                    "Post-call webhook for conversation_id=%s (sms_eligible=0) — "
-                    "using pending eligible conversation_id=%s call_sid=%s",
-                    conversation_id,
-                    pending.get("conversation_id"),
-                    pending.get("call_sid"),
-                )
-                send_row = pending
-            else:
-                logger.info(
-                    "Conversation ended conversation_id=%s call_sid=%s sms_eligible=0",
-                    conversation_id,
-                    row.get("call_sid"),
-                )
-
-        call_sid = send_row.get("call_sid") or ""
+        call_sid = row.get("call_sid") or ""
         if not call_sid:
             return {"action": "skipped", "reason": "missing_call_sid"}
 
         return await self._send_if_eligible(
             call_sid,
-            customer_phone=send_row.get("dial_to") or send_row.get("phone_no") or "",
+            customer_phone=row.get("dial_to") or row.get("phone_no") or "",
             source="elevenlabs_post_call",
         )
 
@@ -172,13 +117,6 @@ class PostCallSmsService:
         if row.get("sms_sent"):
             logger.info("SMS already sent for call_sid=%s — skip duplicate", call_sid)
             return {"action": "skipped", "reason": "already_sent", "source": source}
-
-        if settings.sms_require_eligible and not row.get("sms_eligible"):
-            logger.info(
-                "Call completed but SMS not eligible call_sid=%s (no mark_bill_sms_ready)",
-                call_sid,
-            )
-            return {"action": "skipped", "reason": "not_eligible", "source": source}
 
         to_number = row.get("dial_to") or row.get("phone_no") or customer_phone
         to_number = normalize_e164(to_number) or to_number

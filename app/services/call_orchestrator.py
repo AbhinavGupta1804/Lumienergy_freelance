@@ -46,7 +46,7 @@ class CallOrchestrator:
         to_number = self._resolve_to_number(lead)
         if not to_number or len("".join(c for c in to_number if c.isdigit())) < 10:
             logger.error(
-                "Invalid phone for row %s: %r (check phone_no column D)",
+                "Invalid phone for row %s: %r (check Phone column)",
                 lead.row_number,
                 lead.phone_no,
             )
@@ -77,6 +77,7 @@ class CallOrchestrator:
             result = await self._elevenlabs.initiate_outbound_call(
                 to_number=to_number,
                 first_name=lead.first_name,
+                last_name=lead.last_name,
                 address=lead.address,
                 phone_no=lead.phone_no_e164,
             )

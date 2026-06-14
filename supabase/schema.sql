@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS processed_leads (
     call_successful TEXT,
     transcript_summary TEXT,
     termination_reason TEXT,
-    call_ended_at TIMESTAMPTZ
+    call_ended_at TIMESTAMPTZ,
+    cal_booking_uid TEXT,
+    google_event_uid TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_processed_leads_conversation_id

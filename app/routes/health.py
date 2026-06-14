@@ -17,16 +17,12 @@ async def health_check() -> dict:
 
 @router.get("/status")
 async def status(request: Request) -> dict:
-    """Show poller state and recent processed leads."""
+    """Show webhook config and recent processed leads."""
     dedup = request.app.state.dedup_store
-    poller_running = (
-        request.app.state.sheets_poller.is_running
-        if hasattr(request.app.state, "sheets_poller")
-        else False
-    )
     settings = get_settings()
     return {
-        "poller_running": poller_running,
+        "sheets_webhook_configured": bool(settings.sheets_webhook_secret),
+        "public_base_url": settings.public_base_url or None,
         "database_backend": settings.database_backend,
         "processed_leads": dedup.list_processed(limit=20),
     }

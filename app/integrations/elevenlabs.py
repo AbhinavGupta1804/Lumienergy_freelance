@@ -52,6 +52,7 @@ class ElevenLabsClient:
         *,
         to_number: str,
         first_name: str,
+        last_name: str,
         address: str,
         phone_no: str,
     ) -> dict[str, Any]:
@@ -59,15 +60,21 @@ class ElevenLabsClient:
         Start an outbound call to to_number and pass dynamic variables to the agent.
 
         dynamic_variables map to agent prompt / tool placeholders:
-          {{first_name}}, {{address}}, {{phone_no}}
+          {{first_name}}, {{last_name}}, {{full_name}}, {{address}}, {{phone_no}}
         """
+        first = first_name.strip()
+        last = last_name.strip()
+        full_name = " ".join(p for p in (first, last) if p).strip() or first or last
+
         payload = {
             "agent_id": self._agent_id,
             "agent_phone_number_id": self._agent_phone_number_id,
             "to_number": to_number,
             "conversation_initiation_client_data": {
                 "dynamic_variables": {
-                    "first_name": first_name,
+                    "first_name": first,
+                    "last_name": last,
+                    "full_name": full_name,
                     "address": address,
                     "phone_no": phone_no,
                 },
@@ -76,9 +83,9 @@ class ElevenLabsClient:
         }
 
         logger.info(
-            "Initiating ElevenLabs outbound call to %s (first_name=%s, phone_no=%s)",
+            "Initiating ElevenLabs outbound call to %s (full_name=%s, phone_no=%s)",
             to_number,
-            first_name,
+            full_name,
             phone_no or "(empty)",
         )
 

@@ -5,12 +5,16 @@
   "private": true,
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
-    "formidable": "^3.5.1"
+    "busboy": "^1.6.0"
   },
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "dev": "bun dev-server.js"
+    "dev": "bun dev-server.js",
+    "deploy": "vercel --prod"
+  },
+  "devDependencies": {
+    "vercel": "^54.12.1"
   }
 }

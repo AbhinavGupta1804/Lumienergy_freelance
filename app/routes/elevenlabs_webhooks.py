@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+from app.services.calendar_booking import append_transcript_to_calendar
 from app.services.call_analytics import extract_post_call_analytics
 from app.services.discord_call_summary import notify_call_ended_discord
 from app.services.post_call_sms import PostCallSmsService
@@ -71,7 +72,7 @@ async def elevenlabs_post_call(request: Request) -> JSONResponse:
     """
     Receives ElevenLabs post-call webhooks when a conversation finishes.
 
-    Triggers bill-upload SMS if mark_bill_sms_ready was called during the call.
+    Automatically sends bill-upload SMS to the customer.
     """
     raw = await request.body()
     settings = get_settings()
@@ -120,11 +121,20 @@ async def elevenlabs_post_call(request: Request) -> JSONResponse:
         sms_result = await sms_service.on_conversation_ended(conversation_id)
         logger.info("Post-call SMS (ElevenLabs webhook) result: %s", sms_result)
 
+    calendar_result: dict | None = None
     discord_sent = False
     if hasattr(request.app.state, "dedup_store"):
+        store: DedupStore = request.app.state.dedup_store
+        if event_type == "post_call_transcription":
+            calendar_result = await append_transcript_to_calendar(
+                store=store,
+                conversation_id=conversation_id,
+                webhook_data=data,
+            )
+            logger.info("Post-call calendar update: %s", calendar_result)
         discord_sent = await notify_call_ended_discord(
             payload=payload,
-            store=request.app.state.dedup_store,
+            store=store,
             sms_result=sms_result,
         )
 
@@ -133,6 +143,7 @@ async def elevenlabs_post_call(request: Request) -> JSONResponse:
             "ok": True,
             "analytics_saved": analytics_saved,
             "sms": sms_result,
+            "calendar": calendar_result,
             "discord_sent": discord_sent,
         }
     )

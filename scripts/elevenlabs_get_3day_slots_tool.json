@@ -1,0 +1,34 @@
+{
+  "type": "webhook",
+  "name": "get_available_slots",
+  "description": "Call this ONCE at the start of STEP 4 (scheduling). Returns all available slots for the next 3 days (tomorrow, day after tomorrow, two days after tomorrow) in a single response — no need to call again for different days or periods. The response has a 'days' array with 3 entries. Each day has 'morning', 'afternoon', 'evening' blocks. Each block has 'has_slots' (true/false) and 'offer_speech' (e.g. '10 AM or 11 AM') — read offer_speech directly to the customer. Each block also has 'all_slots' — use this when the customer gives a custom time frame: pick the 2 slots from all_slots closest to what they asked. Use the exact 'start' value from the chosen slot when calling book_slot. If scheduling_window_exhausted is true, no slots exist in any of the 3 days — use the handoff script.",
+  "disable_interruptions": false,
+  "force_pre_tool_speech": false,
+  "pre_tool_speech": "auto",
+  "tool_call_sound": "typing",
+  "tool_call_sound_behavior": "always",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://maya-unanemic-honey.ngrok-free.dev/scheduling/3day-slots",
+    "method": "GET",
+    "path_params_schema": [],
+    "query_params_schema": [],
+    "request_body_schema": null,
+    "request_headers": [
+      {
+        "type": "value",
+        "name": "X-Tool-Api-Key",
+        "value": "lumi_tool_secret_change_me"
+      }
+    ],
+    "content_type": "application/json",
+    "auth_connection": null
+  },
+  "assignments": [],
+  "response_timeout_secs": 20,
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  },
+  "response_mocks": []
+}
