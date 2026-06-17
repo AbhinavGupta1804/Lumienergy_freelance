@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
+from app.utils.scheduling_days import scheduling_call_dynamic_vars
 from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class ElevenLabsClient:
 
         dynamic_variables map to agent prompt / tool placeholders:
           {{first_name}}, {{last_name}}, {{full_name}}, {{address}}, {{phone_no}}
+          {{sched_day_1}}, {{sched_day_1_speech}}, {{sched_day_2}}, {{sched_day_3}} (scheduling weekdays)
         """
         first = first_name.strip()
         last = last_name.strip()
@@ -77,6 +79,7 @@ class ElevenLabsClient:
                     "full_name": full_name,
                     "address": address,
                     "phone_no": phone_no,
+                    **scheduling_call_dynamic_vars(),
                 },
             },
             "call_recording_enabled": False,

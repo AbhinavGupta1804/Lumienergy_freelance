@@ -19,7 +19,8 @@ _PROCESSED_LEADS_COLUMNS = (
     "row_key, row_number, name, address, call_sid, conversation_id, "
     "phone_no, dial_to, sms_eligible, sms_sent, status, processed_at, "
     "call_duration_secs, call_successful, transcript_summary, "
-    "termination_reason, call_ended_at, cal_booking_uid, google_event_uid"
+    "termination_reason, call_ended_at, cal_booking_uid, google_event_uid, "
+    "appointment_start, appointment_label, upload_token, confirmation_sms_sent"
 )
 
 
@@ -43,7 +44,12 @@ class _DedupBackend(Protocol):
         conversation_id: str,
         cal_booking_uid: str,
         google_event_uid: str | None = None,
+        appointment_start: str | None = None,
+        appointment_label: str | None = None,
     ) -> bool: ...
+    def get_by_upload_token(self, upload_token: str) -> dict | None: ...
+    def claim_confirmation_sms_send(self, row_key: str) -> bool: ...
+    def release_confirmation_sms_send(self, row_key: str) -> None: ...
     def get_latest_called_by_phone(self, phone: str) -> dict | None: ...
     def list_processed(self, limit: int = 50) -> list[dict]: ...
 
@@ -113,6 +119,9 @@ class SqliteDedupBackend:
             "upload_token_used": "INTEGER NOT NULL DEFAULT 0",
             "cal_booking_uid": "TEXT",
             "google_event_uid": "TEXT",
+            "appointment_start": "TEXT",
+            "appointment_label": "TEXT",
+            "confirmation_sms_sent": "INTEGER NOT NULL DEFAULT 0",
         }
         for col, typedef in additions.items():
             if col not in existing:
@@ -335,25 +344,65 @@ class SqliteDedupBackend:
         conversation_id: str,
         cal_booking_uid: str,
         google_event_uid: str | None = None,
+        appointment_start: str | None = None,
+        appointment_label: str | None = None,
     ) -> bool:
+        sets = ["cal_booking_uid = ?", "google_event_uid = ?"]
+        params: list[Any] = [cal_booking_uid, google_event_uid]
+        if appointment_start is not None:
+            sets.append("appointment_start = ?")
+            params.append(appointment_start)
+        if appointment_label is not None:
+            sets.append("appointment_label = ?")
+            params.append(appointment_label)
+        params.append(conversation_id)
         with self._connect() as conn:
             cur = conn.execute(
-                """
+                f"""
                 UPDATE processed_leads
-                SET cal_booking_uid = ?, google_event_uid = ?
+                SET {", ".join(sets)}
                 WHERE conversation_id = ?
                 """,
-                (cal_booking_uid, google_event_uid, conversation_id),
+                tuple(params),
             )
             conn.commit()
             updated = cur.rowcount > 0
         if updated:
             logger.info(
-                "Stored Cal booking conversation_id=%s uid=%s",
+                "Stored Cal booking conversation_id=%s uid=%s appointment=%s",
                 conversation_id,
                 cal_booking_uid,
+                appointment_label,
             )
         return updated
+
+    def get_by_upload_token(self, upload_token: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {_PROCESSED_LEADS_COLUMNS} FROM processed_leads WHERE upload_token = ?",
+                (upload_token,),
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def claim_confirmation_sms_send(self, row_key: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads SET confirmation_sms_sent = 1
+                WHERE row_key = ? AND confirmation_sms_sent = 0
+                """,
+                (row_key,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def release_confirmation_sms_send(self, row_key: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE processed_leads SET confirmation_sms_sent = 0 WHERE row_key = ?",
+                (row_key,),
+            )
+            conn.commit()
 
     def get_latest_called_by_phone(self, phone: str) -> dict | None:
         digits = "".join(c for c in phone if c.isdigit())
@@ -580,11 +629,17 @@ class SupabaseDedupBackend:
         conversation_id: str,
         cal_booking_uid: str,
         google_event_uid: str | None = None,
+        appointment_start: str | None = None,
+        appointment_label: str | None = None,
     ) -> bool:
-        payload = {
+        payload: dict[str, Any] = {
             "cal_booking_uid": cal_booking_uid,
             "google_event_uid": google_event_uid,
         }
+        if appointment_start is not None:
+            payload["appointment_start"] = appointment_start
+        if appointment_label is not None:
+            payload["appointment_label"] = appointment_label
         resp = (
             self._table.update(payload)
             .eq("conversation_id", conversation_id)
@@ -593,11 +648,33 @@ class SupabaseDedupBackend:
         updated = bool(resp.data)
         if updated:
             logger.info(
-                "Stored Cal booking conversation_id=%s uid=%s",
+                "Stored Cal booking conversation_id=%s uid=%s appointment=%s",
                 conversation_id,
                 cal_booking_uid,
+                appointment_label,
             )
         return updated
+
+    def get_by_upload_token(self, upload_token: str) -> dict | None:
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("upload_token", upload_token)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def claim_confirmation_sms_send(self, row_key: str) -> bool:
+        resp = (
+            self._table.update({"confirmation_sms_sent": True})
+            .eq("row_key", row_key)
+            .eq("confirmation_sms_sent", False)
+            .execute()
+        )
+        return bool(resp.data)
+
+    def release_confirmation_sms_send(self, row_key: str) -> None:
+        self._table.update({"confirmation_sms_sent": False}).eq("row_key", row_key).execute()
 
     def get_latest_called_by_phone(self, phone: str) -> dict | None:
         digits = "".join(c for c in phone if c.isdigit())
@@ -691,12 +768,25 @@ class DedupStore:
         conversation_id: str,
         cal_booking_uid: str,
         google_event_uid: str | None = None,
+        appointment_start: str | None = None,
+        appointment_label: str | None = None,
     ) -> bool:
         return self._impl.set_cal_booking(
             conversation_id=conversation_id,
             cal_booking_uid=cal_booking_uid,
             google_event_uid=google_event_uid,
+            appointment_start=appointment_start,
+            appointment_label=appointment_label,
         )
+
+    def get_by_upload_token(self, upload_token: str) -> dict | None:
+        return self._impl.get_by_upload_token(upload_token)
+
+    def claim_confirmation_sms_send(self, row_key: str) -> bool:
+        return self._impl.claim_confirmation_sms_send(row_key)
+
+    def release_confirmation_sms_send(self, row_key: str) -> None:
+        self._impl.release_confirmation_sms_send(row_key)
 
     def get_latest_called_by_phone(self, phone: str) -> dict | None:
         return self._impl.get_latest_called_by_phone(phone)

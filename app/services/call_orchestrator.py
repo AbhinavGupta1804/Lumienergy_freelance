@@ -12,6 +12,7 @@ from app.integrations.elevenlabs import ElevenLabsClient, ElevenLabsCallError
 from app.integrations.twilio_calls import attach_status_callback
 from app.models.lead import Lead
 from app.utils.dedup_store import DedupStore
+from app.utils.phone import normalize_e164
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,9 @@ class CallOrchestrator:
         settings = get_settings()
         if settings.test_mode:
             return settings.test_call_number
-        number = lead.dial_number
-        if not number.startswith("+"):
-            number = f"+{number.lstrip('0')}"
+        number = normalize_e164(lead.dial_number) or normalize_e164(lead.phone_no)
+        if not number:
+            number = lead.phone_no.strip()
         return number
 
     async def process_lead(self, lead: Lead) -> dict:

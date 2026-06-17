@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from app.integrations.cal_com import CalComClient, CalComError
+from app.utils.appointment_format import format_appointment_label
 from app.utils.dedup_store import DedupStore
 
 logger = logging.getLogger(__name__)
@@ -111,10 +112,16 @@ async def book_appointment(
             logger.warning("Initial calendar description update failed: %s", exc)
 
     if conv_id:
+        appointment_start = result.get("start") or start
+        appointment_label = (
+            format_appointment_label(appointment_start) if appointment_start else None
+        )
         store.set_cal_booking(
             conversation_id=conv_id,
             cal_booking_uid=result["booking_uid"],
             google_event_uid=google_event_uid,
+            appointment_start=appointment_start,
+            appointment_label=appointment_label,
         )
 
     return {

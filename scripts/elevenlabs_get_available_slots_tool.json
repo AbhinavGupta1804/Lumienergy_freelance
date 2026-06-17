@@ -1,7 +1,7 @@
 {
   "type": "webhook",
   "name": "get_available_slots",
-  "description": "Look up real appointment slots for ONE day. Call this tool every time you need slots for a specific day or period — one call per day_query. NEVER invent times. day_query: 'tomorrow', 'day after tomorrow', or 'two days after tomorrow'. time_period: 'morning', 'afternoon', 'evening', or 'any' (only with time_preference). time_preference: only after the customer rejects the first two slots — pass their time frame verbatim; leave empty on the first morning/afternoon/evening offer. Read spoken_offer to the customer (includes weekday + date + two times, e.g. 'Monday June 15 — 8 AM or 10 AM'). If has_slots is false but has_any_slots is true, that period is empty — try another period on the same day or ask a custom time_preference. If has_any_slots is false, use next_day_query for the next tool call (max 3 days). If scheduling_window_exhausted is true, stop offering slots and use the handoff script. For book_slot, use the exact start from the chosen slot in slots.",
+  "description": "Look up real appointment slots for ONE day. One call per day_query. NEVER invent times or weekday names. day_query for tool calls only: 'tomorrow', 'day after tomorrow', or 'two days after tomorrow' (use next_day_query from the previous response — never guess). time_period: morning, afternoon, evening, or any (with time_preference). Read spoken_offer for slot times (e.g. 'Monday June 15 — 8 AM or 10 AM'). When moving to the next day, read next_day_ask to the customer (weekday name, e.g. 'Okay no worries — how about Thursday — would morning, afternoon, or evening work better for you?') — never say 'day after tomorrow'. If has_any_slots is false, call again with next_day_query. If scheduling_window_exhausted is true, use handoff script. For book_slot, use exact start from slots.",
   "disable_interruptions": false,
   "force_pre_tool_speech": false,
   "pre_tool_speech": "auto",
@@ -18,7 +18,7 @@
         "id": "day_query",
         "type": "string",
         "value_type": "llm_prompt",
-        "description": "Day in the customer's words. Start with 'tomorrow'. When has_any_slots is false, call again with next_day_query from the previous response ('day after tomorrow', then 'two days after tomorrow'). Do not go beyond three days from today.",
+        "description": "Internal day key for the API only — not spoken to the customer. Start with 'tomorrow'. When moving days, use next_day_query from the previous response. Max 3 days.",
         "dynamic_variable": "",
         "constant_value": "",
         "enum": null,

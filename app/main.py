@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.routes import (
     admin,
+    bill_upload_webhooks,
     calls,
     elevenlabs_webhooks,
     health,
@@ -28,6 +29,7 @@ from app.routes import (
     sheets_webhooks,
     webhooks,
 )
+from app.services.bill_upload_confirmation_sms import BillUploadConfirmationSmsService
 from app.services.call_orchestrator import CallOrchestrator
 from app.services.lead_processor import LeadProcessor
 from app.services.post_call_sms import PostCallSmsService
@@ -45,11 +47,13 @@ async def lifespan(app: FastAPI):
     lead_processor = LeadProcessor(dedup_store)
     call_orchestrator = CallOrchestrator(dedup_store)
     post_call_sms = PostCallSmsService(dedup_store)
+    bill_upload_confirmation_sms = BillUploadConfirmationSmsService(dedup_store)
 
     app.state.dedup_store = dedup_store
     app.state.lead_processor = lead_processor
     app.state.call_orchestrator = call_orchestrator
     app.state.post_call_sms_service = post_call_sms
+    app.state.bill_upload_confirmation_sms_service = bill_upload_confirmation_sms
 
     yield
 
@@ -69,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(scheduling.router)
     app.include_router(lumi_webhooks.router)
     app.include_router(elevenlabs_webhooks.router)
+    app.include_router(bill_upload_webhooks.router)
     app.include_router(admin.router)
 
     admin_static = Path(__file__).resolve().parent.parent / "admin_dashboard" / "public"

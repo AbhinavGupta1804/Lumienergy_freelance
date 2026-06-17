@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     sms_bill_upload_link: str = ""
     # Optional full SMS text; use {link} for SMS_BILL_UPLOAD_LINK
     sms_message_body: str = ""
+
+    # --- Post-upload consultation confirmation SMS ---
+    confirmation_sms_enabled: bool = True
+    # Use {appointment} for the human-readable time, e.g. "Saturday, June 20 at 8 AM"
+    confirmation_sms_body: str = ""
+    # Shared secret — bill_upload Vercel app sends X-Bill-Upload-Webhook-Secret header
+    bill_upload_webhook_secret: str = ""
     # Validate X-Twilio-Signature on status callbacks (recommended in production)
     twilio_validate_webhook_signatures: bool = True
 

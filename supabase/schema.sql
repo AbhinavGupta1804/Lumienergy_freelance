@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS processed_leads (
     termination_reason TEXT,
     call_ended_at TIMESTAMPTZ,
     cal_booking_uid TEXT,
-    google_event_uid TEXT
+    google_event_uid TEXT,
+    appointment_start TEXT,
+    appointment_label TEXT,
+    confirmation_sms_sent BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS idx_processed_leads_conversation_id

@@ -26,11 +26,20 @@ import dateparser
 
 from app.config import get_settings
 from app.integrations.cal_com import CalComClient, CalComError
+from app.utils.scheduling_days import (
+    BOOKABLE_WINDOW_SIZE,
+    WINDOW_DAY_LABELS,
+    WINDOW_DAY_QUERIES,
+    bookable_days_window,
+    is_bookable_day,
+    next_bookable_day_in_window,
+    scheduling_window_index,
+)
 
 logger = logging.getLogger(__name__)
 
 VALID_PERIODS = {"any", "morning", "afternoon", "evening"}
-SCHEDULING_WINDOW_DAYS = 3  # tomorrow, day after tomorrow, two days after tomorrow
+SCHEDULING_WINDOW_DAYS = BOOKABLE_WINDOW_SIZE  # 3 bookable days (Mon–Sat), Sundays skipped
 
 WEEKDAYS = {
     "monday": 0, "mon": 0,
@@ -45,15 +54,11 @@ WEEKDAYS = {
 PERIOD_WORDS = ("morning", "afternoon", "evening", "night", "tonight")
 
 NEXT_DAY_QUERIES: dict[int, str] = {
-    1: "day after tomorrow",
-    2: "two days after tomorrow",
+    1: WINDOW_DAY_QUERIES[2],
+    2: WINDOW_DAY_QUERIES[3],
 }
 
-DAY_LABELS: dict[int, str] = {
-    1: "tomorrow",
-    2: "day after tomorrow",
-    3: "two days after tomorrow",
-}
+DAY_LABELS: dict[int, str] = WINDOW_DAY_LABELS
 
 # Longest / most specific first — "tomorrow" is a substring of the other phrases.
 _SCHEDULING_DAY_OFFSETS: list[tuple[re.Pattern[str], int]] = [
@@ -147,7 +152,10 @@ def resolve_day(day_query: str) -> date:
 
     scheduling_offset = _try_scheduling_day_offset(cleaned)
     if scheduling_offset is not None:
-        result = today + timedelta(days=scheduling_offset)
+        window = bookable_days_window(today)
+        if scheduling_offset < 1 or scheduling_offset > len(window):
+            raise SlotFinderError(f"Day '{day_query}' is outside the scheduling window")
+        result = window[scheduling_offset - 1]
     elif weekday_hit := _try_weekday_phrase(cleaned, today):
         result = weekday_hit
     else:
@@ -167,7 +175,9 @@ def resolve_day(day_query: str) -> date:
         result = parsed.date()
 
     if result <= today:
-        result = today + timedelta(days=1)
+        result = bookable_days_window(today)[0]
+    if not is_bookable_day(result):
+        result += timedelta(days=1)
     max_ahead = today + timedelta(days=settings.scheduling_max_days_ahead)
     if result > max_ahead:
         raise SlotFinderError(
@@ -334,18 +344,47 @@ def _format_two_slot_offer(slots: list[dict[str, Any]]) -> str:
     return f"{slots[0]['local']} or {slots[1]['local']}"
 
 
+
+def _next_day_ask_phrase(window_index: int | None, weekday: str) -> str:
+    if window_index == 1:
+        opener = "Okay no worries"
+    else:
+        opener = "Okay"
+    return (
+        f"{opener} — how about {weekday} — "
+        "would morning, afternoon, or evening work better for you?"
+    )
+
+
 def _scheduling_meta(target_day: date, day_has_no_slots: bool) -> dict[str, Any]:
     """Meta for day-level emptiness — use has_any_slots, not period-level has_slots."""
     today = _today_in_business_tz()
     days_from_today = (target_day - today).days
-    exhausted = day_has_no_slots and days_from_today >= SCHEDULING_WINDOW_DAYS
-    next_day_query = None
-    if day_has_no_slots and days_from_today < SCHEDULING_WINDOW_DAYS:
-        next_day_query = NEXT_DAY_QUERIES.get(days_from_today)
+    window_index = scheduling_window_index(today, target_day)
+    next_day = next_bookable_day_in_window(today, target_day)
+    exhausted = (
+        day_has_no_slots
+        and window_index is not None
+        and window_index >= BOOKABLE_WINDOW_SIZE
+    )
+    next_day_query = (
+        NEXT_DAY_QUERIES.get(window_index)
+        if next_day and window_index
+        else None
+    )
+    next_day_weekday = next_day.strftime("%A") if next_day else None
+    next_day_ask = (
+        _next_day_ask_phrase(window_index, next_day_weekday)
+        if next_day_weekday and window_index
+        else None
+    )
     return {
         "days_from_today": days_from_today,
-        "day_label": DAY_LABELS.get(days_from_today, ""),
+        "window_index": window_index,
+        "day_label": DAY_LABELS.get(window_index or 0, ""),
         "next_day_query": next_day_query,
+        "next_day_weekday": next_day_weekday,
+        "next_day_ask": next_day_ask,
         "scheduling_window_exhausted": exhausted,
     }
 
@@ -444,10 +483,11 @@ async def find_3day_slots() -> dict[str, Any]:
     tz_name = settings.business_timezone
     today = _today_in_business_tz()
 
+    window = bookable_days_window(today)
     day_labels = [
-        (today + timedelta(days=1), "tomorrow"),
-        (today + timedelta(days=2), "day after tomorrow"),
-        (today + timedelta(days=3), "two days after tomorrow"),
+        (window[0], WINDOW_DAY_QUERIES[1]),
+        (window[1], WINDOW_DAY_QUERIES[2]),
+        (window[2], WINDOW_DAY_QUERIES[3]),
     ]
     start_day = day_labels[0][0]
     # Extend one day past the window so late-evening slots bucketed on the next

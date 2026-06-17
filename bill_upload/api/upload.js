@@ -227,5 +227,33 @@ module.exports = async function handler(req, res) {
     console.error('upload: mark used error:', updateErr.message);
   }
 
+  // ── 6. Notify Lumi API → send consultation confirmation SMS ──
+  await notifyBillUploadComplete(token);
+
   return res.status(200).json({ ok: true });
 };
+
+async function notifyBillUploadComplete(uploadToken) {
+  const url = process.env.LUMI_API_BILL_UPLOAD_WEBHOOK_URL;
+  const secret = process.env.BILL_UPLOAD_WEBHOOK_SECRET;
+  if (!url || !secret) {
+    console.warn('upload: confirmation webhook not configured (skip SMS)');
+    return;
+  }
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Bill-Upload-Webhook-Secret': secret,
+      },
+      body: JSON.stringify({ upload_token: uploadToken }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error('upload: confirmation webhook HTTP', resp.status, text);
+    }
+  } catch (err) {
+    console.error('upload: confirmation webhook error:', err.message);
+  }
+}

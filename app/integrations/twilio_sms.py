@@ -28,6 +28,17 @@ class SmsSendResult:
     error: str = ""
 
 
+def build_confirmation_sms_body(appointment_label: str) -> str:
+    """SMS after customer uploads their bill (consultation confirmed + time)."""
+    settings = get_settings()
+    if settings.confirmation_sms_body:
+        return settings.confirmation_sms_body.format(appointment=appointment_label)
+    return (
+        f"Your Lumi Energy consultation is confirmed for {appointment_label}. "
+        "We received your bill — thank you!"
+    )
+
+
 def build_sms_body(upload_link: str | None = None) -> str:
     """
     SMS text from environment.
