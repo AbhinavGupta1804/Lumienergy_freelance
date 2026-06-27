@@ -17,7 +17,7 @@ function fmtDate(iso?: string | null) {
   });
 }
 
-function fmtDuration(secs?: number | null) {
+function fmtDuration(secs?: number | string | null) {
   if (secs == null || secs === "") return "—";
   const n = Number(secs);
   if (Number.isNaN(n)) return "—";
