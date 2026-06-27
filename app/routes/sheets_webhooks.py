@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.integrations.customer_notifications import notification_channel
 from app.integrations.google_sheets import build_row_key
 from app.models.lead import Lead
 from app.services.lead_processor import LeadProcessor
@@ -28,6 +29,7 @@ class NewLeadBody(BaseModel):
     last_name: str = ""
     address: str = ""
     phone_no: str = ""
+    email: str = ""
 
     def to_lead(self) -> Lead:
         from datetime import datetime, timezone
@@ -36,6 +38,7 @@ class NewLeadBody(BaseModel):
         last_name = self.last_name.strip()
         address = self.address.strip()
         phone_no = self.phone_no.strip()
+        email = self.email.strip()
         row_key = build_row_key(
             self.row_number, first_name, last_name, address, phone_no
         )
@@ -45,6 +48,7 @@ class NewLeadBody(BaseModel):
             last_name=last_name,
             address=address,
             phone_no=phone_no,
+            email=email,
             row_key=row_key,
             detected_at=datetime.now(timezone.utc),
         )
@@ -87,6 +91,12 @@ async def sheets_new_lead(
     if not lead.first_name and not lead.last_name and not lead.address and not lead.phone_no:
         raise HTTPException(status_code=400, detail="Row is empty")
 
+    if notification_channel() == "email" and not lead.email.strip():
+        logger.warning(
+            "Row %s has no Email — post-call notification will be skipped (NOTIFICATION_CHANNEL=email)",
+            lead.row_number,
+        )
+
     dedup = request.app.state.dedup_store
     if dedup.is_processed(lead.row_key):
         return {
@@ -98,7 +108,7 @@ async def sheets_new_lead(
 
     processor: LeadProcessor = request.app.state.lead_processor
     background_tasks.add_task(_process_lead_task, processor, lead)
-    logger.info("Sheets webhook accepted row %s (%s)", lead.row_number, lead.full_name)
+    logger.info("Sheets webhook accepted row %s (%s) email=%s", lead.row_number, lead.full_name, lead.email or "(empty)")
 
     return {
         "accepted": True,

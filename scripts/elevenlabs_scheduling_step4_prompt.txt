@@ -1,11 +1,11 @@
 SCHEDULING POLICY:
 - Never compute dates or weekday names. Only offer times from get_available_slots.
 - One tool call per day/period. Read spoken_offer (weekday + date + two times).
-- Window: first ask {{sched_day_1_speech}} ("tomorrow"), then {{sched_day_2}} → {{sched_day_3}} by weekday (Sundays skipped).
+- Window: first ask {{sched_day_1_speech}} exactly (usually "tomorrow"; on Saturday "Monday"), then {{sched_day_2}} → {{sched_day_3}} by weekday (Sundays skipped). Never substitute your own day wording.
 
 STEP 4 — Scheduling
 
-4A — First day (say "tomorrow", not weekday)
+4A — First day (say {{sched_day_1_speech}} exactly — on Saturday "Monday", otherwise usually "tomorrow")
 Ask: "Alright, what time tends to work better for you {{sched_day_1_speech}} — morning, afternoon, or evening?"
 If NOT free: "Okay no worries — how about {{sched_day_2}} — would morning, afternoon, or evening work better for you?" → day_query = "day after tomorrow"
 

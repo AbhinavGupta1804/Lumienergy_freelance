@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS processed_leads (
     row_number INTEGER NOT NULL,
     name TEXT,
     address TEXT,
+    email TEXT,
     call_sid TEXT,
     conversation_id TEXT,
     status TEXT NOT NULL DEFAULT 'called',
@@ -24,7 +25,13 @@ CREATE TABLE IF NOT EXISTS processed_leads (
     google_event_uid TEXT,
     appointment_start TEXT,
     appointment_label TEXT,
-    confirmation_sms_sent BOOLEAN NOT NULL DEFAULT FALSE
+    confirmation_sms_sent BOOLEAN NOT NULL DEFAULT FALSE,
+    first_call_at TIMESTAMPTZ,
+    callback_attempt INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMPTZ,
+    callback_status TEXT NOT NULL DEFAULT 'none',
+    call_in_progress BOOLEAN NOT NULL DEFAULT FALSE,
+    last_twilio_status TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_processed_leads_conversation_id
@@ -41,3 +48,30 @@ CREATE INDEX IF NOT EXISTS idx_processed_leads_phone_dial
 
 COMMENT ON TABLE processed_leads IS
     'One row per outbound call attempt (sheet dedup + SMS + post-call analytics)';
+
+-- Customer SMS / email message log (inbound + outbound)
+CREATE TABLE IF NOT EXISTS customer_messages (
+    id              BIGSERIAL PRIMARY KEY,
+    direction       TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    channel         TEXT NOT NULL CHECK (channel IN ('sms', 'email')),
+    message_type    TEXT NOT NULL DEFAULT 'general',
+    body            TEXT NOT NULL,
+    from_address    TEXT,
+    to_address      TEXT,
+    lead_row_key    TEXT,
+    lead_name       TEXT,
+    call_sid        TEXT,
+    conversation_id TEXT,
+    provider_id     TEXT,
+    status          TEXT NOT NULL DEFAULT 'sent',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_customer_messages_created_at
+    ON customer_messages (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_customer_messages_lead_row_key
+    ON customer_messages (lead_row_key);
+
+COMMENT ON TABLE customer_messages IS
+    'Log of SMS/email sent to customers and replies received from them';

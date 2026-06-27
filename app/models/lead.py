@@ -21,6 +21,7 @@ class Lead:
     last_name: str
     address: str
     phone_no: str
+    email: str
     row_key: str
     detected_at: datetime
 

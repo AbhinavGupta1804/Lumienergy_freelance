@@ -16,11 +16,13 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 _PROCESSED_LEADS_COLUMNS = (
-    "row_key, row_number, name, address, call_sid, conversation_id, "
+    "row_key, row_number, name, address, email, call_sid, conversation_id, "
     "phone_no, dial_to, sms_eligible, sms_sent, status, processed_at, "
     "call_duration_secs, call_successful, transcript_summary, "
     "termination_reason, call_ended_at, cal_booking_uid, google_event_uid, "
-    "appointment_start, appointment_label, upload_token, confirmation_sms_sent"
+    "appointment_start, appointment_label, upload_token, confirmation_sms_sent, "
+    "first_call_at, callback_attempt, next_retry_at, callback_status, "
+    "call_in_progress, last_twilio_status"
 )
 
 
@@ -52,6 +54,34 @@ class _DedupBackend(Protocol):
     def release_confirmation_sms_send(self, row_key: str) -> None: ...
     def get_latest_called_by_phone(self, phone: str) -> dict | None: ...
     def list_processed(self, limit: int = 50) -> list[dict]: ...
+    def get_by_row_key(self, row_key: str) -> dict | None: ...
+    def list_due_callbacks(self, *, before_iso: str, limit: int = 20) -> list[dict]: ...
+    def claim_callback_dial(self, row_key: str, *, before_iso: str) -> bool: ...
+    def release_call_in_progress(self, row_key: str) -> None: ...
+    def update_call_started_for_retry(
+        self,
+        *,
+        row_key: str,
+        call_sid: str,
+        conversation_id: str | None,
+    ) -> None: ...
+    def update_callback_outcome(
+        self,
+        *,
+        row_key: str,
+        callback_attempt: int,
+        callback_status: str,
+        next_retry_at: str | None,
+        last_twilio_status: str | None,
+        call_in_progress: bool = False,
+    ) -> None: ...
+    def release_stale_in_progress(self, *, stale_before_iso: str) -> int: ...
+    def cancel_active_callbacks_for_phone(
+        self, phone: str, *, except_row_key: str
+    ) -> int: ...
+    def list_stuck_active_calls(
+        self, *, stale_before_iso: str, limit: int = 20
+    ) -> list[dict]: ...
 
 
 def _row_to_dict(row: Any) -> dict:
@@ -122,6 +152,13 @@ class SqliteDedupBackend:
             "appointment_start": "TEXT",
             "appointment_label": "TEXT",
             "confirmation_sms_sent": "INTEGER NOT NULL DEFAULT 0",
+            "first_call_at": "TEXT",
+            "callback_attempt": "INTEGER NOT NULL DEFAULT 0",
+            "next_retry_at": "TEXT",
+            "callback_status": "TEXT NOT NULL DEFAULT 'none'",
+            "call_in_progress": "INTEGER NOT NULL DEFAULT 0",
+            "last_twilio_status": "TEXT",
+            "email": "TEXT",
         }
         for col, typedef in additions.items():
             if col not in existing:
@@ -146,28 +183,39 @@ class SqliteDedupBackend:
         conversation_id: str | None = None,
         phone_no: str | None = None,
         dial_to: str | None = None,
+        email: str | None = None,
         status: str = "called",
+        track_callback: bool = True,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        callback_status = "active" if track_callback else "none"
+        in_progress = 1 if track_callback else 0
+        first_call = now if track_callback else None
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO processed_leads
-                (row_key, row_number, name, address, call_sid, conversation_id,
-                 phone_no, dial_to, sms_eligible, sms_sent, status, processed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+                (row_key, row_number, name, address, email, call_sid, conversation_id,
+                 phone_no, dial_to, sms_eligible, sms_sent, status, processed_at,
+                 first_call_at, callback_attempt, next_retry_at, callback_status,
+                 call_in_progress)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 0, NULL, ?, ?)
                 """,
                 (
                     row_key,
                     row_number,
                     name,
                     address,
+                    (email or "").strip() or None,
                     call_sid,
                     conversation_id,
                     phone_no,
                     dial_to,
                     status,
                     now,
+                    first_call,
+                    callback_status,
+                    in_progress,
                 ),
             )
             conn.commit()
@@ -436,6 +484,166 @@ class SqliteDedupBackend:
             ).fetchall()
         return [_row_to_dict(r) for r in rows]
 
+    def get_by_row_key(self, row_key: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {_PROCESSED_LEADS_COLUMNS} FROM processed_leads WHERE row_key = ?",
+                (row_key,),
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def list_due_callbacks(self, *, before_iso: str, limit: int = 20) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE callback_status = 'active'
+                  AND call_in_progress = 0
+                  AND next_retry_at IS NOT NULL
+                  AND next_retry_at <= ?
+                ORDER BY next_retry_at ASC
+                LIMIT ?
+                """,
+                (before_iso, limit),
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def claim_callback_dial(self, row_key: str, *, before_iso: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET call_in_progress = 1, next_retry_at = NULL
+                WHERE row_key = ?
+                  AND callback_status = 'active'
+                  AND call_in_progress = 0
+                  AND next_retry_at IS NOT NULL
+                  AND next_retry_at <= ?
+                """,
+                (row_key, before_iso),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def release_call_in_progress(self, row_key: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE processed_leads SET call_in_progress = 0 WHERE row_key = ?",
+                (row_key,),
+            )
+            conn.commit()
+
+    def update_call_started_for_retry(
+        self,
+        *,
+        row_key: str,
+        call_sid: str,
+        conversation_id: str | None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET call_sid = ?, conversation_id = ?, processed_at = ?,
+                    call_in_progress = 1, next_retry_at = NULL, status = 'called'
+                WHERE row_key = ?
+                """,
+                (call_sid, conversation_id, now, row_key),
+            )
+            conn.commit()
+
+    def update_callback_outcome(
+        self,
+        *,
+        row_key: str,
+        callback_attempt: int,
+        callback_status: str,
+        next_retry_at: str | None,
+        last_twilio_status: str | None,
+        call_in_progress: bool = False,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET callback_attempt = ?, callback_status = ?, next_retry_at = ?,
+                    last_twilio_status = ?, call_in_progress = ?
+                WHERE row_key = ?
+                """,
+                (
+                    callback_attempt,
+                    callback_status,
+                    next_retry_at,
+                    last_twilio_status,
+                    1 if call_in_progress else 0,
+                    row_key,
+                ),
+            )
+            conn.commit()
+
+    def release_stale_in_progress(self, *, stale_before_iso: str) -> int:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET call_in_progress = 0
+                WHERE call_in_progress = 1
+                  AND processed_at < ?
+                  AND callback_status = 'active'
+                """,
+                (stale_before_iso,),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def cancel_active_callbacks_for_phone(
+        self, phone: str, *, except_row_key: str
+    ) -> int:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return 0
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET callback_status = 'exhausted',
+                    next_retry_at = NULL,
+                    call_in_progress = 0
+                WHERE callback_status = 'active'
+                  AND row_key != ?
+                  AND (
+                    REPLACE(REPLACE(REPLACE(phone_no, '+', ''), ' ', ''), '-', '') = ?
+                    OR REPLACE(REPLACE(REPLACE(dial_to, '+', ''), ' ', ''), '-', '') = ?
+                  )
+                """,
+                (except_row_key, digits, digits),
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def list_stuck_active_calls(
+        self, *, stale_before_iso: str, limit: int = 20
+    ) -> list[dict]:
+        """Calls that started but never received ElevenLabs post-call analytics."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE callback_status = 'active'
+                  AND call_in_progress = 1
+                  AND call_ended_at IS NULL
+                  AND call_sid IS NOT NULL
+                  AND processed_at < ?
+                ORDER BY processed_at ASC
+                LIMIT ?
+                """,
+                (stale_before_iso, limit),
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
 
 def _pg_eq_value(value: str) -> str:
     """Quote PostgREST filter values (E.164 phones contain '+')."""
@@ -473,26 +681,33 @@ class SupabaseDedupBackend:
         conversation_id: str | None = None,
         phone_no: str | None = None,
         dial_to: str | None = None,
+        email: str | None = None,
         status: str = "called",
+        track_callback: bool = True,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        self._table.upsert(
-            {
-                "row_key": row_key,
-                "row_number": row_number,
-                "name": name,
-                "address": address,
-                "call_sid": call_sid,
-                "conversation_id": conversation_id,
-                "phone_no": phone_no,
-                "dial_to": dial_to,
-                "sms_eligible": False,
-                "sms_sent": False,
-                "status": status,
-                "processed_at": now,
-            },
-            on_conflict="row_key",
-        ).execute()
+        payload: dict[str, Any] = {
+            "row_key": row_key,
+            "row_number": row_number,
+            "name": name,
+            "address": address,
+            "email": (email or "").strip() or None,
+            "call_sid": call_sid,
+            "conversation_id": conversation_id,
+            "phone_no": phone_no,
+            "dial_to": dial_to,
+            "sms_eligible": False,
+            "sms_sent": False,
+            "status": status,
+            "processed_at": now,
+            "callback_attempt": 0,
+            "next_retry_at": None,
+            "call_in_progress": track_callback,
+            "callback_status": "active" if track_callback else "none",
+        }
+        if track_callback:
+            payload["first_call_at"] = now
+        self._table.upsert(payload, on_conflict="row_key").execute()
         logger.info("Marked row_key=%s as processed (status=%s)", row_key, status)
 
     def get_by_call_sid(self, call_sid: str) -> dict | None:
@@ -704,6 +919,132 @@ class SupabaseDedupBackend:
         )
         return resp.data or []
 
+    def get_by_row_key(self, row_key: str) -> dict | None:
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("row_key", row_key)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def list_due_callbacks(self, *, before_iso: str, limit: int = 20) -> list[dict]:
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("callback_status", "active")
+            .eq("call_in_progress", False)
+            .not_.is_("next_retry_at", "null")
+            .lte("next_retry_at", before_iso)
+            .order("next_retry_at")
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
+
+    def claim_callback_dial(self, row_key: str, *, before_iso: str) -> bool:
+        resp = (
+            self._table.update({"call_in_progress": True, "next_retry_at": None})
+            .eq("row_key", row_key)
+            .eq("callback_status", "active")
+            .eq("call_in_progress", False)
+            .not_.is_("next_retry_at", "null")
+            .lte("next_retry_at", before_iso)
+            .execute()
+        )
+        return bool(resp.data)
+
+    def release_call_in_progress(self, row_key: str) -> None:
+        self._table.update({"call_in_progress": False}).eq("row_key", row_key).execute()
+
+    def update_call_started_for_retry(
+        self,
+        *,
+        row_key: str,
+        call_sid: str,
+        conversation_id: str | None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._table.update(
+            {
+                "call_sid": call_sid,
+                "conversation_id": conversation_id,
+                "processed_at": now,
+                "call_in_progress": True,
+                "next_retry_at": None,
+                "status": "called",
+            }
+        ).eq("row_key", row_key).execute()
+
+    def update_callback_outcome(
+        self,
+        *,
+        row_key: str,
+        callback_attempt: int,
+        callback_status: str,
+        next_retry_at: str | None,
+        last_twilio_status: str | None,
+        call_in_progress: bool = False,
+    ) -> None:
+        self._table.update(
+            {
+                "callback_attempt": callback_attempt,
+                "callback_status": callback_status,
+                "next_retry_at": next_retry_at,
+                "last_twilio_status": last_twilio_status,
+                "call_in_progress": call_in_progress,
+            }
+        ).eq("row_key", row_key).execute()
+
+    def release_stale_in_progress(self, *, stale_before_iso: str) -> int:
+        resp = (
+            self._table.update({"call_in_progress": False})
+            .eq("call_in_progress", True)
+            .eq("callback_status", "active")
+            .lt("processed_at", stale_before_iso)
+            .execute()
+        )
+        return len(resp.data or [])
+
+    def cancel_active_callbacks_for_phone(
+        self, phone: str, *, except_row_key: str
+    ) -> int:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return 0
+        cancelled = 0
+        for col in ("phone_no", "dial_to"):
+            resp = (
+                self._table.update(
+                    {
+                        "callback_status": "exhausted",
+                        "next_retry_at": None,
+                        "call_in_progress": False,
+                    }
+                )
+                .eq("callback_status", "active")
+                .neq("row_key", except_row_key)
+                .like(col, f"%{digits}%")
+                .execute()
+            )
+            cancelled += len(resp.data or [])
+        return cancelled
+
+    def list_stuck_active_calls(
+        self, *, stale_before_iso: str, limit: int = 20
+    ) -> list[dict]:
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("callback_status", "active")
+            .eq("call_in_progress", True)
+            .is_("call_ended_at", "null")
+            .not_.is_("call_sid", "null")
+            .lt("processed_at", stale_before_iso)
+            .order("processed_at")
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
+
 
 class DedupStore:
     """Facade — picks SQLite or Supabase from settings."""
@@ -793,3 +1134,64 @@ class DedupStore:
 
     def list_processed(self, limit: int = 50) -> list[dict]:
         return self._impl.list_processed(limit)
+
+    def get_by_row_key(self, row_key: str) -> dict | None:
+        return self._impl.get_by_row_key(row_key)
+
+    def list_due_callbacks(self, *, before_iso: str, limit: int = 20) -> list[dict]:
+        return self._impl.list_due_callbacks(before_iso=before_iso, limit=limit)
+
+    def claim_callback_dial(self, row_key: str, *, before_iso: str) -> bool:
+        return self._impl.claim_callback_dial(row_key, before_iso=before_iso)
+
+    def release_call_in_progress(self, row_key: str) -> None:
+        self._impl.release_call_in_progress(row_key)
+
+    def update_call_started_for_retry(
+        self,
+        *,
+        row_key: str,
+        call_sid: str,
+        conversation_id: str | None,
+    ) -> None:
+        self._impl.update_call_started_for_retry(
+            row_key=row_key,
+            call_sid=call_sid,
+            conversation_id=conversation_id,
+        )
+
+    def update_callback_outcome(
+        self,
+        *,
+        row_key: str,
+        callback_attempt: int,
+        callback_status: str,
+        next_retry_at: str | None,
+        last_twilio_status: str | None,
+        call_in_progress: bool = False,
+    ) -> None:
+        self._impl.update_callback_outcome(
+            row_key=row_key,
+            callback_attempt=callback_attempt,
+            callback_status=callback_status,
+            next_retry_at=next_retry_at,
+            last_twilio_status=last_twilio_status,
+            call_in_progress=call_in_progress,
+        )
+
+    def release_stale_in_progress(self, *, stale_before_iso: str) -> int:
+        return self._impl.release_stale_in_progress(stale_before_iso=stale_before_iso)
+
+    def cancel_active_callbacks_for_phone(
+        self, phone: str, *, except_row_key: str
+    ) -> int:
+        return self._impl.cancel_active_callbacks_for_phone(
+            phone, except_row_key=except_row_key
+        )
+
+    def list_stuck_active_calls(
+        self, *, stale_before_iso: str, limit: int = 20
+    ) -> list[dict]:
+        return self._impl.list_stuck_active_calls(
+            stale_before_iso=stale_before_iso, limit=limit
+        )

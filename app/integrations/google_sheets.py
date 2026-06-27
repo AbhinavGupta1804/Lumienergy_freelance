@@ -120,6 +120,7 @@ class GoogleSheetsClient:
             last_name = fields["last_name"]
             address = fields["address"]
             phone_no = fields["phone_no"]
+            email = fields["email"]
 
             if not first_name and not last_name and not address and not phone_no:
                 continue
@@ -132,6 +133,7 @@ class GoogleSheetsClient:
                     last_name=last_name,
                     address=address,
                     phone_no=phone_no,
+                    email=email,
                     row_key=row_key,
                     detected_at=now,
                 )

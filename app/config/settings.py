@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     app_name: str = "Lumi Outbound AI Caller"
     debug: bool = False
     log_level: str = "INFO"
+    # Comma-separated origins for Next.js admin (dev + Vercel)
+    cors_origins: str = "http://localhost:3000"
 
     # --- Server (used in README for ngrok URL examples) ---
     host: str = "0.0.0.0"
@@ -38,8 +40,9 @@ class Settings(BaseSettings):
     # Column headers in row 1 (Landing page forms layout)
     sheets_col_first_name: str = "First Name"
     sheets_col_last_name: str = "Last Name"
-    sheets_col_address: str = "Street Address"
+    sheets_col_address: str = "Address"
     sheets_col_phone: str = "Phone"
+    sheets_col_email: str = "Email"
 
     # --- Testing overrides ---
     # When true, ignore phone_no column and always dial TEST_CALL_NUMBER
@@ -58,20 +61,39 @@ class Settings(BaseSettings):
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""  # Your purchased E.164 number (voice + SMS From)
+    # A2P 10DLC: send SMS via Messaging Service (required for US delivery after 10DLC)
+    twilio_messaging_service_sid: str = ""  # e.g. MGxxxxxxxx — preferred over From number
 
-    # --- Post-call SMS (Twilio Status Callback → /webhooks/twilio/status) ---
+    # --- Post-call notifications (bill upload link) ---
+    # Channel: sms (Twilio) or email (SMTP). Same channel used for confirmation after upload.
+    notification_channel: str = "sms"  # sms | email
     sms_enabled: bool = True
     # Base URL of the Vercel bill-upload app (no trailing slash).
     # Individual links are built as: {sms_bill_upload_base_url}/?token=<uuid>
     sms_bill_upload_base_url: str = "https://lumi-bill-upload.vercel.app"
     # Deprecated: kept for backward-compat if SMS_MESSAGE_BODY uses {link}.
     sms_bill_upload_link: str = ""
-    # Optional full SMS text; use {link} for SMS_BILL_UPLOAD_LINK
+    # Optional full SMS text; placeholders: {link}, {first_name}, {support_phone}
     sms_message_body: str = ""
+    sms_support_phone: str = "+1 (480) 252-6872"
 
-    # --- Post-upload consultation confirmation SMS ---
+    # --- Email (SMTP) — used when NOTIFICATION_CHANNEL=email ---
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "Lumi Energy"
+    smtp_use_tls: bool = True
+    # Optional templates — {link}, {first_name}, {appointment}
+    email_bill_upload_subject: str = ""
+    email_bill_upload_body: str = ""
+    email_confirmation_subject: str = ""
+    email_confirmation_body: str = ""
+
+    # --- Post-upload consultation confirmation ---
     confirmation_sms_enabled: bool = True
-    # Use {appointment} for the human-readable time, e.g. "Saturday, June 20 at 8 AM"
+    # Use {appointment}, {appointment_date}, {appointment_time}
     confirmation_sms_body: str = ""
     # Shared secret — bill_upload Vercel app sends X-Bill-Upload-Webhook-Secret header
     bill_upload_webhook_secret: str = ""
@@ -100,7 +122,18 @@ class Settings(BaseSettings):
     # Channel webhook: Server Settings → Integrations → Webhooks → New Webhook → Copy URL
     discord_webhook_url: str = ""
 
-    # --- Retry ---
+    # --- Callback retry scheduler ---
+    callback_enabled: bool = True
+    callback_max_days: int = 7
+    callback_scheduler_interval_seconds: int = 60
+    callback_morning_hour: int = 9
+    callback_evening_hour: int = 19
+    callback_evening_cutoff_hour: int = 20
+    callback_stale_in_progress_minutes: int = 45
+    # Reconcile via Twilio when EL post-call webhook never arrives
+    callback_reconcile_after_minutes: int = 3
+
+    # --- Retry (ElevenLabs API) ---
     max_call_retries: int = 3
     retry_base_delay_seconds: float = 2.0
 

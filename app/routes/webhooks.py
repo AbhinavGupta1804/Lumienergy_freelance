@@ -20,6 +20,7 @@ from app.integrations.twilio_webhooks import (
     parse_status_callback,
     validate_twilio_signature,
 )
+from app.services.message_logger import log_inbound_message
 from app.services.post_call_sms import PostCallSmsService
 
 logger = logging.getLogger(__name__)
@@ -86,4 +87,61 @@ async def twilio_voice_fallback(request: Request) -> PlainTextResponse:
         form.get("To"),
     )
     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+    return PlainTextResponse(twiml, media_type="application/xml")
+
+
+@router.post("/sms")
+async def twilio_inbound_sms(request: Request) -> PlainTextResponse:
+    """
+    Twilio Messaging webhook for inbound SMS replies from customers.
+
+    Configure your Twilio number's "A message comes in" webhook to:
+      POST {PUBLIC_BASE_URL}/webhooks/twilio/sms
+    """
+    form = await request.form()
+    raw_params = {k: str(v) for k, v in form.items()}
+
+    settings = get_settings()
+    if settings.twilio_validate_webhook_signatures:
+        signature = request.headers.get("X-Twilio-Signature")
+        url = str(request.url)
+        if not validate_twilio_signature(
+            auth_token=settings.twilio_auth_token,
+            url=url,
+            params=raw_params,
+            signature=signature,
+        ):
+            logger.warning("Invalid Twilio signature for inbound SMS")
+            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
+    from_addr = (raw_params.get("From") or "").strip()
+    to_addr = (raw_params.get("To") or "").strip()
+    body = (raw_params.get("Body") or "").strip()
+    message_sid = (raw_params.get("MessageSid") or "").strip()
+
+    logger.info(
+        "Inbound SMS from=%s to=%s sid=%s body_len=%s",
+        from_addr,
+        to_addr,
+        message_sid,
+        len(body),
+    )
+
+    message_store = getattr(request.app.state, "message_store", None)
+    dedup_store = getattr(request.app.state, "dedup_store", None)
+    if message_store and body:
+        try:
+            log_inbound_message(
+                message_store=message_store,
+                dedup_store=dedup_store,
+                channel="sms",
+                body=body,
+                from_address=from_addr,
+                to_address=to_addr,
+                provider_id=message_sid,
+            )
+        except Exception:
+            logger.exception("Failed to log inbound SMS sid=%s", message_sid)
+
+    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
     return PlainTextResponse(twiml, media_type="application/xml")

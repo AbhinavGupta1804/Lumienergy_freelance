@@ -19,3 +19,6 @@ dateparser>=1.2.0
 
 # Supabase Postgres (when DATABASE_BACKEND=supabase)
 supabase>=2.10.0
+
+# Callback retry scheduler
+APScheduler>=3.10.4

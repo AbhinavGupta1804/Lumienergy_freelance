@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.services.calendar_booking import append_transcript_to_calendar
 from app.services.call_analytics import extract_post_call_analytics
+from app.services.callback_service import CallbackService
 from app.services.discord_call_summary import notify_call_ended_discord
 from app.services.post_call_sms import PostCallSmsService
 from app.utils.dedup_store import DedupStore
@@ -116,9 +117,21 @@ async def elevenlabs_post_call(request: Request) -> JSONResponse:
         analytics_saved = store.update_post_call_analytics(**analytics_fields)
 
     sms_result: dict | None = None
+    callback_result: dict | None = None
+    answered = False
+
+    if hasattr(request.app.state, "callback_service"):
+        callback_service: CallbackService = request.app.state.callback_service
+        callback_result = await callback_service.on_conversation_ended(conversation_id)
+        answered = bool(callback_result.get("answered"))
+        logger.info("Post-call callback result: %s", callback_result)
+
     if hasattr(request.app.state, "post_call_sms_service"):
         sms_service: PostCallSmsService = request.app.state.post_call_sms_service
-        sms_result = await sms_service.on_conversation_ended(conversation_id)
+        sms_result = await sms_service.on_conversation_ended(
+            conversation_id,
+            answered=answered,
+        )
         logger.info("Post-call SMS (ElevenLabs webhook) result: %s", sms_result)
 
     calendar_result: dict | None = None
@@ -142,6 +155,7 @@ async def elevenlabs_post_call(request: Request) -> JSONResponse:
         {
             "ok": True,
             "analytics_saved": analytics_saved,
+            "callback": callback_result,
             "sms": sms_result,
             "calendar": calendar_result,
             "discord_sent": discord_sent,

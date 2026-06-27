@@ -52,9 +52,11 @@ def extract_lead_fields(row: list[str], header_index: dict[str, int]) -> dict[st
         return str(row[idx]).strip()
 
     names = required_header_names()
+    email_header = get_settings().sheets_col_email
     return {
         "first_name": cell(names["first_name"]),
         "last_name": cell(names["last_name"]),
         "address": cell(names["address"]),
         "phone_no": cell(names["phone_no"]),
+        "email": cell(email_header),
     }

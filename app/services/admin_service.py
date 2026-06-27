@@ -10,20 +10,30 @@ import logging
 from typing import Any
 
 from app.config import get_settings
+from app.utils.phone import normalize_e164
 
 logger = logging.getLogger(__name__)
 
 _CALL_COLUMNS = (
-    "row_key, row_number, name, address, phone_no, dial_to, "
+    "row_key, row_number, name, address, email, phone_no, dial_to, "
     "call_sid, conversation_id, status, processed_at, "
-    "sms_eligible, sms_sent, upload_token_used, "
+    "sms_eligible, sms_sent, upload_token_used, confirmation_sms_sent, "
     "call_duration_secs, call_successful, transcript_summary, "
-    "termination_reason, call_ended_at"
+    "termination_reason, call_ended_at, "
+    "appointment_start, appointment_label, "
+    "cal_booking_uid, google_event_uid, "
+    "first_call_at, callback_attempt, next_retry_at, callback_status, "
+    "call_in_progress, last_twilio_status"
 )
 
 _BILL_COLUMNS = (
     "id, lead_row_key, upload_token, storage_path, original_name, "
     "content_type, size_bytes, status, uploaded_at"
+)
+
+_MESSAGE_COLUMNS = (
+    "id, direction, channel, message_type, body, from_address, to_address, "
+    "lead_row_key, lead_name, call_sid, conversation_id, provider_id, status, created_at"
 )
 
 
@@ -94,6 +104,130 @@ class AdminService:
             rows.append(enriched)
 
         return rows
+
+    def list_messages(
+        self,
+        *,
+        q: str = "",
+        direction: str = "all",
+        channel: str = "all",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        query = (
+            self._client.table("customer_messages")
+            .select(_MESSAGE_COLUMNS)
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
+        if direction != "all":
+            query = query.eq("direction", direction)
+        if channel != "all":
+            query = query.eq("channel", channel)
+        resp = query.execute()
+        items = resp.data or []
+        if q.strip():
+            needle = q.strip().lower()
+            items = [
+                m
+                for m in items
+                if needle
+                in " ".join(
+                    str(m.get(k) or "")
+                    for k in (
+                        "body",
+                        "from_address",
+                        "to_address",
+                        "lead_name",
+                        "lead_row_key",
+                        "message_type",
+                    )
+                ).lower()
+            ]
+        return items
+
+    @staticmethod
+    def customer_phone_for_message(message: dict[str, Any]) -> str:
+        direction = (message.get("direction") or "").lower()
+        if direction == "inbound":
+            return normalize_e164(message.get("from_address") or "") or (
+                message.get("from_address") or ""
+            ).strip()
+        return normalize_e164(message.get("to_address") or "") or (
+            message.get("to_address") or ""
+        ).strip()
+
+    def list_conversations(
+        self,
+        *,
+        q: str = "",
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """SMS threads grouped by customer phone (sidebar)."""
+        messages = self.list_messages(channel="sms", limit=5000)
+        by_phone: dict[str, dict[str, Any]] = {}
+
+        for msg in messages:
+            phone = self.customer_phone_for_message(msg)
+            if not phone:
+                continue
+            existing = by_phone.get(phone)
+            created = msg.get("created_at") or ""
+            if not existing:
+                by_phone[phone] = {
+                    "phone": phone,
+                    "lead_name": (msg.get("lead_name") or "").strip(),
+                    "last_message": (msg.get("body") or "")[:120],
+                    "last_message_at": created,
+                    "last_direction": msg.get("direction"),
+                }
+                continue
+            if created > (existing.get("last_message_at") or ""):
+                existing["last_message"] = (msg.get("body") or "")[:120]
+                existing["last_message_at"] = created
+                existing["last_direction"] = msg.get("direction")
+            name = (msg.get("lead_name") or "").strip()
+            if name and not existing.get("lead_name"):
+                existing["lead_name"] = name
+
+        rows = sorted(
+            by_phone.values(),
+            key=lambda r: r.get("last_message_at") or "",
+            reverse=True,
+        )
+        if q.strip():
+            needle = q.strip().lower()
+            rows = [
+                r
+                for r in rows
+                if needle
+                in f"{r.get('lead_name', '')} {r.get('phone', '')} {r.get('last_message', '')}".lower()
+            ]
+        return rows[:limit]
+
+    def get_conversation_messages(
+        self,
+        phone: str,
+        *,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """All SMS for one customer phone, oldest first (chat thread)."""
+        normalized = normalize_e164(phone) or phone.strip()
+        if not normalized:
+            return []
+
+        q = normalized.replace('"', '\\"')
+        phone_filter = f'from_address.eq."{q}",to_address.eq."{q}"'
+
+        resp = (
+            self._client.table("customer_messages")
+            .select(_MESSAGE_COLUMNS)
+            .eq("channel", "sms")
+            .or_(phone_filter)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
 
     def get_call(self, row_key: str) -> dict[str, Any] | None:
         resp = (
@@ -178,6 +312,8 @@ class AdminService:
             return bool(row.get("sms_sent"))
         if filter_by == "call_failed":
             return not AdminService._is_call_successful(row)
+        if filter_by == "callback_active":
+            return row.get("callback_status") == "active"
         return True
 
     @staticmethod

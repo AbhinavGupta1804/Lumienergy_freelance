@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lumi Energy — Call Dashboard</title>
+  <title>Lumi Energy — Admin Dashboard</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -12,22 +12,21 @@
     <header class="topbar">
       <div class="topbar-left">
         <span class="brand">Lumi Energy</span>
-        <span class="brand-sub">Call Dashboard</span>
+        <span class="brand-sub" id="page-subtitle">Call Dashboard</span>
       </div>
       <div class="topbar-right">
         <input type="search" id="search" class="search" placeholder="Search name, phone, address…" />
-        <select id="filter" class="filter-select">
-          <option value="all">All calls</option>
-          <option value="bill_uploaded">Bill uploaded</option>
-          <option value="no_bill">No bill</option>
-          <option value="sms_sent">SMS sent</option>
-          <option value="call_failed">Call failed</option>
-        </select>
+        <select id="filter" class="filter-select"></select>
         <button type="button" class="btn-refresh" id="btn-refresh">Refresh</button>
       </div>
     </header>
 
-    <div class="layout">
+    <nav class="tab-bar" aria-label="Dashboard sections">
+      <button type="button" class="tab active" data-tab="calls">Calls</button>
+      <button type="button" class="tab" data-tab="messages">Messages</button>
+    </nav>
+
+    <div class="layout" id="calls-view">
       <section class="panel panel-list">
         <div class="panel-head">
           <h2>Calls</h2>
@@ -42,12 +41,13 @@
                 <th>Date</th>
                 <th>Duration</th>
                 <th>SMS</th>
+                <th>Callback</th>
                 <th>Bill</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody id="calls-body">
-              <tr><td colspan="7" class="empty-row">Loading…</td></tr>
+              <tr><td colspan="8" class="empty-row">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -76,6 +76,11 @@
             <div class="field"><label>Call SID</label><span id="d-call-sid" class="mono">—</span></div>
             <div class="field"><label>Conversation ID</label><span id="d-conv-id" class="mono">—</span></div>
             <div class="field"><label>Termination</label><span id="d-termination">—</span></div>
+            <div class="field"><label>Callback status</label><span id="d-callback-status">—</span></div>
+            <div class="field"><label>Callback attempts</label><span id="d-callback-attempt">—</span></div>
+            <div class="field"><label>Next retry</label><span id="d-next-retry">—</span></div>
+            <div class="field"><label>Last Twilio status</label><span id="d-twilio-status">—</span></div>
+            <div class="field"><label>Call in progress</label><span id="d-in-progress">—</span></div>
           </div>
 
           <div class="detail-block">
@@ -94,6 +99,63 @@
               <button type="button" class="btn-link" id="btn-close-preview">Close</button>
             </div>
             <div id="preview-container" class="preview-container"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="layout layout-messages" id="messages-view" hidden>
+      <section class="panel panel-list panel-messages-list">
+        <div class="panel-head">
+          <h2>Messages</h2>
+          <span id="message-count" class="count-badge">0</span>
+        </div>
+        <div class="table-wrap">
+          <table class="calls-table messages-table">
+            <thead>
+              <tr>
+                <th>Direction</th>
+                <th>Channel</th>
+                <th>Type</th>
+                <th>Lead</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Message</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody id="messages-body">
+              <tr><td colspan="8" class="empty-row">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel panel-detail" id="message-detail-panel">
+        <div class="detail-empty" id="message-detail-empty">
+          <p>Select a message to view full text</p>
+        </div>
+        <div class="detail-content" id="message-detail-content" hidden>
+          <div class="panel-head">
+            <h2 id="msg-detail-title">Message</h2>
+            <span id="msg-detail-direction" class="status-pill">—</span>
+          </div>
+
+          <div class="detail-grid">
+            <div class="field"><label>Channel</label><span id="m-channel">—</span></div>
+            <div class="field"><label>Type</label><span id="m-type">—</span></div>
+            <div class="field"><label>Lead</label><span id="m-lead">—</span></div>
+            <div class="field"><label>From</label><span id="m-from">—</span></div>
+            <div class="field"><label>To</label><span id="m-to">—</span></div>
+            <div class="field"><label>Status</label><span id="m-status">—</span></div>
+            <div class="field"><label>Date</label><span id="m-date">—</span></div>
+            <div class="field"><label>Provider ID</label><span id="m-provider" class="mono">—</span></div>
+            <div class="field"><label>Call SID</label><span id="m-call-sid" class="mono">—</span></div>
+          </div>
+
+          <div class="detail-block">
+            <h3>Full message</h3>
+            <pre id="m-body" class="message-body">—</pre>
           </div>
         </div>
       </section>

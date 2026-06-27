@@ -407,6 +407,75 @@ body {
   font-size: 0.875rem;
 }
 
+/* ─── Tabs ──────────────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 0 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  font-family: var(--font);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+
+.layout-messages {
+  grid-template-columns: 1.4fr 1fr;
+}
+
+.messages-table td.message-preview {
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.message-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.pill-inbound {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+
+.pill-outbound {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 1fr;
