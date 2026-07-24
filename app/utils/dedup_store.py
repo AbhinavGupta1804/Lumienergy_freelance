@@ -22,7 +22,9 @@ _PROCESSED_LEADS_COLUMNS = (
     "termination_reason, call_ended_at, cal_booking_uid, google_event_uid, "
     "appointment_start, appointment_label, upload_token, confirmation_sms_sent, "
     "first_call_at, callback_attempt, next_retry_at, callback_status, "
-    "call_in_progress, last_twilio_status"
+    "call_in_progress, last_twilio_status, "
+    "offer_page, monthly_bill, report_sent, report_email_type, self_booked, "
+    "followup_email_status, followup_email_attempt, next_followup_email_at"
 )
 
 
@@ -82,6 +84,29 @@ class _DedupBackend(Protocol):
     def list_stuck_active_calls(
         self, *, stale_before_iso: str, limit: int = 20
     ) -> list[dict]: ...
+    def mark_report_sent(
+        self, *, row_key: str, report_email_type: str
+    ) -> bool: ...
+    def mark_self_booked(self, *, row_key: str) -> bool: ...
+    def find_active_callback_by_phone(self, phone: str) -> dict | None: ...
+    def find_active_callback_by_email(self, email: str) -> dict | None: ...
+    def find_active_followup_by_email(self, email: str) -> dict | None: ...
+    def find_active_followup_by_phone(self, phone: str) -> dict | None: ...
+    def schedule_followup_email(self, *, row_key: str, next_at_iso: str) -> bool: ...
+    def list_due_followup_emails(
+        self, *, before_iso: str, limit: int = 20
+    ) -> list[dict]: ...
+    def claim_followup_email(self, row_key: str, *, before_iso: str) -> bool: ...
+    def update_followup_email_state(
+        self,
+        *,
+        row_key: str,
+        attempt: int,
+        status: str,
+        next_at_iso: str | None,
+    ) -> None: ...
+    def cancel_followup_emails(self, *, row_key: str) -> bool: ...
+    def cancel_pending_callbacks(self, *, row_key: str) -> bool: ...
 
 
 def _row_to_dict(row: Any) -> dict:
@@ -159,6 +184,14 @@ class SqliteDedupBackend:
             "call_in_progress": "INTEGER NOT NULL DEFAULT 0",
             "last_twilio_status": "TEXT",
             "email": "TEXT",
+            "offer_page": "TEXT",
+            "monthly_bill": "REAL",
+            "report_sent": "INTEGER NOT NULL DEFAULT 0",
+            "report_email_type": "TEXT",
+            "self_booked": "INTEGER NOT NULL DEFAULT 0",
+            "followup_email_status": "TEXT NOT NULL DEFAULT 'none'",
+            "followup_email_attempt": "INTEGER NOT NULL DEFAULT 0",
+            "next_followup_email_at": "TEXT",
         }
         for col, typedef in additions.items():
             if col not in existing:
@@ -186,6 +219,9 @@ class SqliteDedupBackend:
         email: str | None = None,
         status: str = "called",
         track_callback: bool = True,
+        sms_eligible: bool = False,
+        offer_page: str = "",
+        monthly_bill: float = 0.0,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         callback_status = "active" if track_callback else "none"
@@ -198,8 +234,8 @@ class SqliteDedupBackend:
                 (row_key, row_number, name, address, email, call_sid, conversation_id,
                  phone_no, dial_to, sms_eligible, sms_sent, status, processed_at,
                  first_call_at, callback_attempt, next_retry_at, callback_status,
-                 call_in_progress)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 0, NULL, ?, ?)
+                 call_in_progress, offer_page, monthly_bill)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
                 """,
                 (
                     row_key,
@@ -211,11 +247,14 @@ class SqliteDedupBackend:
                     conversation_id,
                     phone_no,
                     dial_to,
+                    1 if sms_eligible else 0,
                     status,
                     now,
                     first_call,
                     callback_status,
                     in_progress,
+                    offer_page or None,
+                    monthly_bill or None,
                 ),
             )
             conn.commit()
@@ -644,6 +683,220 @@ class SqliteDedupBackend:
             ).fetchall()
         return [_row_to_dict(r) for r in rows]
 
+    def mark_report_sent(self, *, row_key: str, report_email_type: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET report_sent = 1, report_email_type = ?
+                WHERE row_key = ?
+                """,
+                (report_email_type, row_key),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def mark_self_booked(self, *, row_key: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET self_booked = 1, callback_status = 'self_booked',
+                    next_retry_at = NULL, call_in_progress = 0
+                WHERE row_key = ?
+                """,
+                (row_key,),
+            )
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET followup_email_status = 'booked', next_followup_email_at = NULL
+                WHERE row_key = ? AND followup_email_status = 'active'
+                """,
+                (row_key,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def find_active_callback_by_phone(self, phone: str) -> dict | None:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE callback_status = 'active'
+                  AND (
+                    REPLACE(REPLACE(REPLACE(phone_no, '+', ''), ' ', ''), '-', '') = ?
+                    OR REPLACE(REPLACE(REPLACE(dial_to, '+', ''), ' ', ''), '-', '') = ?
+                  )
+                ORDER BY processed_at DESC
+                LIMIT 1
+                """,
+                (digits, digits),
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def find_active_callback_by_email(self, email: str) -> dict | None:
+        email = (email or "").strip().lower()
+        if not email:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE callback_status = 'active'
+                  AND LOWER(email) = ?
+                ORDER BY processed_at DESC
+                LIMIT 1
+                """,
+                (email,),
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def find_active_followup_by_email(self, email: str) -> dict | None:
+        email = (email or "").strip().lower()
+        if not email:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE followup_email_status = 'active'
+                  AND LOWER(email) = ?
+                ORDER BY processed_at DESC
+                LIMIT 1
+                """,
+                (email,),
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def find_active_followup_by_phone(self, phone: str) -> dict | None:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE followup_email_status = 'active'
+                  AND (
+                    REPLACE(REPLACE(REPLACE(phone_no, '+', ''), ' ', ''), '-', '') = ?
+                    OR REPLACE(REPLACE(REPLACE(dial_to, '+', ''), ' ', ''), '-', '') = ?
+                  )
+                ORDER BY processed_at DESC
+                LIMIT 1
+                """,
+                (digits, digits),
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def schedule_followup_email(self, *, row_key: str, next_at_iso: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET followup_email_status = 'active',
+                    followup_email_attempt = 0,
+                    next_followup_email_at = ?
+                WHERE row_key = ?
+                """,
+                (next_at_iso, row_key),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def list_due_followup_emails(
+        self, *, before_iso: str, limit: int = 20
+    ) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {_PROCESSED_LEADS_COLUMNS}
+                FROM processed_leads
+                WHERE followup_email_status = 'active'
+                  AND next_followup_email_at IS NOT NULL
+                  AND next_followup_email_at <= ?
+                ORDER BY next_followup_email_at ASC
+                LIMIT ?
+                """,
+                (before_iso, limit),
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def claim_followup_email(self, row_key: str, *, before_iso: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET next_followup_email_at = NULL
+                WHERE row_key = ?
+                  AND followup_email_status = 'active'
+                  AND next_followup_email_at IS NOT NULL
+                  AND next_followup_email_at <= ?
+                """,
+                (row_key, before_iso),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def update_followup_email_state(
+        self,
+        *,
+        row_key: str,
+        attempt: int,
+        status: str,
+        next_at_iso: str | None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET followup_email_attempt = ?,
+                    followup_email_status = ?,
+                    next_followup_email_at = ?
+                WHERE row_key = ?
+                """,
+                (attempt, status, next_at_iso, row_key),
+            )
+            conn.commit()
+
+    def cancel_followup_emails(self, *, row_key: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET followup_email_status = 'cancelled',
+                    next_followup_email_at = NULL
+                WHERE row_key = ?
+                  AND followup_email_status = 'active'
+                """,
+                (row_key,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def cancel_pending_callbacks(self, *, row_key: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET callback_status = 'cancelled',
+                    next_retry_at = NULL,
+                    call_in_progress = 0
+                WHERE row_key = ?
+                  AND callback_status = 'active'
+                """,
+                (row_key,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
 
 def _pg_eq_value(value: str) -> str:
     """Quote PostgREST filter values (E.164 phones contain '+')."""
@@ -684,6 +937,9 @@ class SupabaseDedupBackend:
         email: str | None = None,
         status: str = "called",
         track_callback: bool = True,
+        sms_eligible: bool = False,
+        offer_page: str = "",
+        monthly_bill: float = 0.0,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         payload: dict[str, Any] = {
@@ -696,7 +952,7 @@ class SupabaseDedupBackend:
             "conversation_id": conversation_id,
             "phone_no": phone_no,
             "dial_to": dial_to,
-            "sms_eligible": False,
+            "sms_eligible": sms_eligible,
             "sms_sent": False,
             "status": status,
             "processed_at": now,
@@ -704,6 +960,8 @@ class SupabaseDedupBackend:
             "next_retry_at": None,
             "call_in_progress": track_callback,
             "callback_status": "active" if track_callback else "none",
+            "offer_page": offer_page or None,
+            "monthly_bill": monthly_bill or None,
         }
         if track_callback:
             payload["first_call_at"] = now
@@ -1045,6 +1303,174 @@ class SupabaseDedupBackend:
         )
         return resp.data or []
 
+    def mark_report_sent(self, *, row_key: str, report_email_type: str) -> bool:
+        resp = (
+            self._table.update({"report_sent": True, "report_email_type": report_email_type})
+            .eq("row_key", row_key)
+            .execute()
+        )
+        return bool(resp.data)
+
+    def mark_self_booked(self, *, row_key: str) -> bool:
+        resp = (
+            self._table.update({
+                "self_booked": True,
+                "callback_status": "self_booked",
+                "next_retry_at": None,
+                "call_in_progress": False,
+            })
+            .eq("row_key", row_key)
+            .execute()
+        )
+        (
+            self._table.update({
+                "followup_email_status": "booked",
+                "next_followup_email_at": None,
+            })
+            .eq("row_key", row_key)
+            .eq("followup_email_status", "active")
+            .execute()
+        )
+        return bool(resp.data)
+
+    def find_active_callback_by_phone(self, phone: str) -> dict | None:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return None
+        for col in ("phone_no", "dial_to"):
+            resp = (
+                self._table.select(_PROCESSED_LEADS_COLUMNS)
+                .eq("callback_status", "active")
+                .like(col, f"%{digits}%")
+                .order("processed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                return resp.data[0]
+        return None
+
+    def find_active_callback_by_email(self, email: str) -> dict | None:
+        email = (email or "").strip().lower()
+        if not email:
+            return None
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("callback_status", "active")
+            .ilike("email", email)
+            .order("processed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def find_active_followup_by_email(self, email: str) -> dict | None:
+        email = (email or "").strip().lower()
+        if not email:
+            return None
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("followup_email_status", "active")
+            .ilike("email", email)
+            .order("processed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def find_active_followup_by_phone(self, phone: str) -> dict | None:
+        digits = "".join(c for c in phone if c.isdigit())
+        if not digits:
+            return None
+        for col in ("phone_no", "dial_to"):
+            resp = (
+                self._table.select(_PROCESSED_LEADS_COLUMNS)
+                .eq("followup_email_status", "active")
+                .like(col, f"%{digits}%")
+                .order("processed_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                return resp.data[0]
+        return None
+
+    def schedule_followup_email(self, *, row_key: str, next_at_iso: str) -> bool:
+        resp = (
+            self._table.update({
+                "followup_email_status": "active",
+                "followup_email_attempt": 0,
+                "next_followup_email_at": next_at_iso,
+            })
+            .eq("row_key", row_key)
+            .execute()
+        )
+        return bool(resp.data)
+
+    def list_due_followup_emails(
+        self, *, before_iso: str, limit: int = 20
+    ) -> list[dict]:
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .eq("followup_email_status", "active")
+            .not_.is_("next_followup_email_at", "null")
+            .lte("next_followup_email_at", before_iso)
+            .order("next_followup_email_at")
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
+
+    def claim_followup_email(self, row_key: str, *, before_iso: str) -> bool:
+        resp = (
+            self._table.update({"next_followup_email_at": None})
+            .eq("row_key", row_key)
+            .eq("followup_email_status", "active")
+            .not_.is_("next_followup_email_at", "null")
+            .lte("next_followup_email_at", before_iso)
+            .execute()
+        )
+        return bool(resp.data)
+
+    def update_followup_email_state(
+        self,
+        *,
+        row_key: str,
+        attempt: int,
+        status: str,
+        next_at_iso: str | None,
+    ) -> None:
+        self._table.update({
+            "followup_email_attempt": attempt,
+            "followup_email_status": status,
+            "next_followup_email_at": next_at_iso,
+        }).eq("row_key", row_key).execute()
+
+    def cancel_followup_emails(self, *, row_key: str) -> bool:
+        resp = (
+            self._table.update({
+                "followup_email_status": "cancelled",
+                "next_followup_email_at": None,
+            })
+            .eq("row_key", row_key)
+            .eq("followup_email_status", "active")
+            .execute()
+        )
+        return bool(resp.data)
+
+    def cancel_pending_callbacks(self, *, row_key: str) -> bool:
+        resp = (
+            self._table.update({
+                "callback_status": "cancelled",
+                "next_retry_at": None,
+                "call_in_progress": False,
+            })
+            .eq("row_key", row_key)
+            .eq("callback_status", "active")
+            .execute()
+        )
+        return bool(resp.data)
+
 
 class DedupStore:
     """Facade — picks SQLite or Supabase from settings."""
@@ -1195,3 +1621,54 @@ class DedupStore:
         return self._impl.list_stuck_active_calls(
             stale_before_iso=stale_before_iso, limit=limit
         )
+
+    def mark_report_sent(self, *, row_key: str, report_email_type: str) -> bool:
+        return self._impl.mark_report_sent(
+            row_key=row_key, report_email_type=report_email_type
+        )
+
+    def mark_self_booked(self, *, row_key: str) -> bool:
+        return self._impl.mark_self_booked(row_key=row_key)
+
+    def find_active_callback_by_phone(self, phone: str) -> dict | None:
+        return self._impl.find_active_callback_by_phone(phone)
+
+    def find_active_callback_by_email(self, email: str) -> dict | None:
+        return self._impl.find_active_callback_by_email(email)
+
+    def find_active_followup_by_email(self, email: str) -> dict | None:
+        return self._impl.find_active_followup_by_email(email)
+
+    def find_active_followup_by_phone(self, phone: str) -> dict | None:
+        return self._impl.find_active_followup_by_phone(phone)
+
+    def schedule_followup_email(self, *, row_key: str, next_at_iso: str) -> bool:
+        return self._impl.schedule_followup_email(
+            row_key=row_key, next_at_iso=next_at_iso
+        )
+
+    def list_due_followup_emails(
+        self, *, before_iso: str, limit: int = 20
+    ) -> list[dict]:
+        return self._impl.list_due_followup_emails(before_iso=before_iso, limit=limit)
+
+    def claim_followup_email(self, row_key: str, *, before_iso: str) -> bool:
+        return self._impl.claim_followup_email(row_key, before_iso=before_iso)
+
+    def update_followup_email_state(
+        self,
+        *,
+        row_key: str,
+        attempt: int,
+        status: str,
+        next_at_iso: str | None,
+    ) -> None:
+        self._impl.update_followup_email_state(
+            row_key=row_key, attempt=attempt, status=status, next_at_iso=next_at_iso
+        )
+
+    def cancel_followup_emails(self, *, row_key: str) -> bool:
+        return self._impl.cancel_followup_emails(row_key=row_key)
+
+    def cancel_pending_callbacks(self, *, row_key: str) -> bool:
+        return self._impl.cancel_pending_callbacks(row_key=row_key)

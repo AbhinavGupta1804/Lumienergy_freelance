@@ -53,7 +53,9 @@ def log_outbound_message(
     ctx = _lead_context(dedup_store, customer_phone or to_address)
     settings = get_settings()
     from_addr = from_address or (
-        settings.twilio_phone_number if channel == "sms" else settings.smtp_from_email
+        settings.twilio_phone_number
+        if channel == "sms"
+        else (settings.resend_from_email or settings.smtp_from_email)
     )
     now = datetime.now(timezone.utc).isoformat()
     msg_id = message_store.log_message(

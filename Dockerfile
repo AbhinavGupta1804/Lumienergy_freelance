@@ -9,7 +9,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY admin_dashboard ./admin_dashboard
+# Tiny optional static admin (~30KB) — not the Next.js app
+COPY admin_dashboard/_legacy ./admin_dashboard/_legacy
 
 EXPOSE 8000
 

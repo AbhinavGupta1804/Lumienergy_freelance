@@ -1,3 +1,3 @@
-from app.routes import calls, health, scheduling, webhooks
+from app.routes import calcom_webhooks, calls, health, scheduling, webhooks
 
-__all__ = ["calls", "health", "scheduling", "webhooks"]
+__all__ = ["calcom_webhooks", "calls", "health", "scheduling", "webhooks"]

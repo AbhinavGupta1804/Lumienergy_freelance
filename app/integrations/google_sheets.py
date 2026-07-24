@@ -17,6 +17,8 @@ from app.config import get_settings
 from app.integrations.sheet_columns import (
     build_header_index,
     extract_lead_fields,
+    parse_monthly_bill,
+    parse_yes_no_consent,
     validate_headers,
 )
 from app.models.lead import Lead
@@ -136,6 +138,11 @@ class GoogleSheetsClient:
                     email=email,
                     row_key=row_key,
                     detected_at=now,
+                    transactional_sms_consent=parse_yes_no_consent(
+                        fields.get("sms_consent")
+                    ),
+                    offer_page=(fields.get("offer_page") or "").strip().lower(),
+                    monthly_bill=parse_monthly_bill(fields.get("monthly_bill")),
                 )
             )
 

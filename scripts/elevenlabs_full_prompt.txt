@@ -140,6 +140,9 @@ Then proceed to STEP 6b — Bill upload SMS notice.
 STEP 6b — Bill upload SMS notice (required before closing)
 Say:
 "Once we wrap up, I'll text you a link where you can upload your bill — that helps us prepare for the visit."
+Immediately call mark_bill_sms_ready with phone_no = {{phone_no}}.
+Do NOT call this tool if book_slot did not succeed or you never reached this step.
+Wait for the tool to return before STEP 7.
 STEP 7 — Closing
 Close with:
 "Alright {{first_name}}, thanks for taking the call, Ivan will see you there, have a good day."

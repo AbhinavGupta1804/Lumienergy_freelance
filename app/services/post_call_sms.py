@@ -1,8 +1,7 @@
 """
-Post-call notification after voice calls end (bill upload link via SMS or email).
+Bill-upload notification — sent during the call at Step 6b via mark_bill_sms_ready tool.
 
-Primary trigger: ElevenLabs POST /webhooks/elevenlabs/post-call
-Secondary: Twilio status callback when call was answered.
+Post-call and Twilio status paths no longer send bill-upload SMS (avoid duplicates).
 """
 
 import logging
@@ -13,9 +12,7 @@ from app.integrations.customer_notifications import (
     notification_channel,
     send_bill_upload_notification,
 )
-from app.integrations.twilio_webhooks import customer_phone_from_callback
 from app.services.message_logger import log_outbound_failure, log_outbound_message
-from app.utils.callback_schedule import is_call_answered
 from app.utils.dedup_store import DedupStore
 from app.utils.message_store import CustomerMessageStore
 from app.utils.phone import normalize_e164
@@ -41,41 +38,34 @@ class PostCallSmsService:
         self._store = store
         self._message_store = message_store
 
-    async def on_status_callback(self, callback: dict[str, str]) -> dict:
-        """Handle Twilio Status Callback — notify only when call was answered."""
-        call_sid = callback.get("call_sid", "")
-        status = (callback.get("status") or "").lower()
+    async def send_bill_upload_at_step_6b(self, *, phone_no: str) -> dict:
+        """Step 6b tool — send bill-upload link to latest call row for this phone."""
+        phone = normalize_e164(phone_no) or phone_no.strip()
+        if not phone:
+            return {"action": "skipped", "reason": "missing_phone"}
 
+        row = self._store.get_latest_called_by_phone(phone)
+        if not row:
+            logger.warning("mark_bill_sms_ready: no call row for phone=%s", phone)
+            return {"action": "skipped", "reason": "unknown_phone"}
+
+        call_sid = row.get("call_sid") or ""
         if not call_sid:
-            return {"action": "ignored", "reason": "missing_call_sid"}
+            return {"action": "skipped", "reason": "missing_call_sid"}
 
-        if status != "completed":
-            logger.debug(
-                "Twilio status ignored call_sid=%s status=%s",
-                call_sid,
-                status,
-            )
-            return {"action": "ignored", "call_status": status}
-
-        try:
-            duration = int(callback.get("duration") or 0)
-        except (TypeError, ValueError):
-            duration = 0
-
-        if not is_call_answered(status, duration):
-            return {
-                "action": "skipped",
-                "reason": "not_answered",
-                "call_status": status,
-                "duration": duration,
-            }
-
-        customer_phone = customer_phone_from_callback(callback)
         return await self._send_if_eligible(
             call_sid,
-            customer_phone=customer_phone,
-            source="twilio_status_callback",
+            customer_phone=phone,
+            source="mark_bill_sms_ready_tool",
         )
+
+    async def on_status_callback(self, callback: dict[str, str]) -> dict:
+        """Twilio status callback — bill-upload SMS is sent at Step 6b only."""
+        return {
+            "action": "skipped",
+            "reason": "bill_sms_via_step_6b_tool",
+            "call_sid": callback.get("call_sid", ""),
+        }
 
     async def on_call_completed(self, call_sid: str, call_status: str) -> dict:
         return await self.on_status_callback(
@@ -87,31 +77,11 @@ class PostCallSmsService:
         conversation_id: str,
         *,
         answered: bool,
+        webhook_payload: dict | None = None,
     ) -> dict:
-        if not answered:
-            logger.info(
-                "Skip post-call notification — not answered conversation_id=%s",
-                conversation_id,
-            )
-            return {"action": "skipped", "reason": "not_answered"}
-
-        row = self._store.get_by_conversation_id(conversation_id)
-        if not row:
-            logger.warning(
-                "ElevenLabs post-call: unknown conversation_id=%s",
-                conversation_id,
-            )
-            return {"action": "skipped", "reason": "unknown_conversation_id"}
-
-        call_sid = row.get("call_sid") or ""
-        if not call_sid:
-            return {"action": "skipped", "reason": "missing_call_sid"}
-
-        return await self._send_if_eligible(
-            call_sid,
-            customer_phone=row.get("dial_to") or row.get("phone_no") or "",
-            source="elevenlabs_post_call",
-        )
+        """Post-call webhook — bill-upload SMS already sent at Step 6b when applicable."""
+        _ = answered, webhook_payload, conversation_id
+        return {"action": "skipped", "reason": "bill_sms_via_step_6b_tool"}
 
     async def _send_if_eligible(
         self,
@@ -144,6 +114,14 @@ class PostCallSmsService:
             return {"action": "skipped", "reason": "no_email", "source": source, "channel": channel}
         if channel == "sms" and not phone:
             return {"action": "skipped", "reason": "no_phone", "source": source, "channel": channel}
+
+        if channel == "sms" and not row.get("sms_eligible"):
+            logger.info(
+                "Skip bill-upload SMS — no transactional consent call_sid=%s row_key=%s",
+                call_sid,
+                row.get("row_key"),
+            )
+            return {"action": "skipped", "reason": "no_sms_consent", "source": source}
 
         if not self._store.claim_sms_send(call_sid):
             return {"action": "skipped", "reason": "already_sent", "source": source}

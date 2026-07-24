@@ -10,14 +10,14 @@ export function AppShell({ active, children }: Props & { children: React.ReactNo
       <header className="flex shrink-0 items-center justify-between border-b border-lumi-border bg-white px-6 py-3">
         <div className="flex items-baseline gap-3">
           <span className="text-lg font-bold">Lumi Energy</span>
-          <span className="text-sm text-lumi-muted">Admin</span>
+          <span className="text-sm text-lumi-muted">CRM</span>
         </div>
         <nav className="flex gap-1 rounded-lg bg-lumi-bg p-1">
-          <NavLink href="/messages" active={active === "messages"}>
-            Messages
-          </NavLink>
           <NavLink href="/calls" active={active === "calls"}>
-            Calls
+            Leads
+          </NavLink>
+          <NavLink href="/messages" active={active === "messages"}>
+            Inbox
           </NavLink>
         </nav>
       </header>

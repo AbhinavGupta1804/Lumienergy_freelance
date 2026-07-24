@@ -5,13 +5,19 @@ Resolves dial number, calls ElevenLabs API, and records success in the dedup sto
 Supports initial sheet-triggered calls and scheduled callback retries.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from app.integrations.elevenlabs import ElevenLabsClient, ElevenLabsCallError
 from app.integrations.twilio_calls import attach_status_callback
 from app.models.lead import Lead
 from app.utils.dedup_store import DedupStore
 from app.utils.phone import normalize_e164
+
+if TYPE_CHECKING:
+    from app.services.post_call_report import PostCallReportService
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +34,23 @@ def _name_parts(full_name: str) -> tuple[str, str]:
 class CallOrchestrator:
     """Place one outbound AI call per lead."""
 
-    def __init__(self, dedup_store: DedupStore) -> None:
+    def __init__(
+        self,
+        dedup_store: DedupStore,
+        report_service: PostCallReportService | None = None,
+    ) -> None:
         self._dedup = dedup_store
         self._elevenlabs = ElevenLabsClient()
+        self._report = report_service
+
+    async def _send_report_on_dial_fail(self, row_key: str) -> None:
+        if not self._report:
+            return
+        try:
+            result = await self._report.on_dial_failed(row_key)
+            logger.info("Dial-fail report email row_key=%s: %s", row_key, result)
+        except Exception:
+            logger.exception("Dial-fail report email crashed row_key=%s", row_key)
 
     async def process_lead(self, lead: Lead) -> dict:
         """
@@ -70,7 +90,10 @@ class CallOrchestrator:
                 email=lead.email,
                 status="failed",
                 track_callback=False,
+                offer_page=lead.offer_page,
+                monthly_bill=lead.monthly_bill,
             )
+            await self._send_report_on_dial_fail(lead.row_key)
             return {
                 "skipped": False,
                 "success": False,
@@ -87,6 +110,9 @@ class CallOrchestrator:
             to_number=to_number,
             phone_no=lead.phone_no_e164,
             is_retry=False,
+            sms_eligible=lead.transactional_sms_consent,
+            offer_page=lead.offer_page,
+            monthly_bill=lead.monthly_bill,
         )
 
     async def retry_call_for_row(self, row: dict) -> dict:
@@ -124,6 +150,9 @@ class CallOrchestrator:
         is_retry: bool,
         first_name: str = "",
         last_name: str = "",
+        sms_eligible: bool = False,
+        offer_page: str = "",
+        monthly_bill: float = 0.0,
     ) -> dict:
         if not first_name and not last_name:
             first_name, last_name = _name_parts(name)
@@ -167,7 +196,10 @@ class CallOrchestrator:
                     email=email,
                     status="failed",
                     track_callback=False,
+                    offer_page=offer_page,
+                    monthly_bill=monthly_bill,
                 )
+                await self._send_report_on_dial_fail(row_key)
             return {"skipped": False, "success": False, "error": str(exc), "row_key": row_key}
 
         call_sid = result.get("callSid") or result.get("call_sid")
@@ -199,6 +231,9 @@ class CallOrchestrator:
                 phone_no=phone_no,
                 dial_to=to_number,
                 status="called",
+                sms_eligible=sms_eligible,
+                offer_page=offer_page,
+                monthly_bill=monthly_bill,
             )
 
         logger.info(

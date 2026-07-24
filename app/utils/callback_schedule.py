@@ -17,16 +17,39 @@ from zoneinfo import ZoneInfo
 
 from app.config import get_settings
 
-UNANSWERED_TWILIO_STATUSES = frozenset({"no-answer", "busy"})
+UNANSWERED_TWILIO_STATUSES = frozenset({
+    "no-answer",
+    "busy",
+    "failed",
+    "canceled",
+    "cancelled",
+})
 
 
-def is_call_answered(twilio_status: str, duration_secs: int | None) -> bool:
-    """Customer picked up — real conversation (duration > 0)."""
+def is_call_answered(
+    twilio_status: str,
+    duration_secs: int | None,
+    *,
+    voicemail_detected: bool = False,
+) -> bool:
+    """Customer picked up — real conversation (duration > 0), not voicemail."""
+    if voicemail_detected:
+        return False
+    status = (twilio_status or "").lower()
+    if status in UNANSWERED_TWILIO_STATUSES:
+        return False
     return (duration_secs or 0) > 0
 
 
-def is_call_unanswered(twilio_status: str, duration_secs: int | None) -> bool:
-    """Schedule a callback: no-answer, busy, or completed with zero duration."""
+def is_call_unanswered(
+    twilio_status: str,
+    duration_secs: int | None,
+    *,
+    voicemail_detected: bool = False,
+) -> bool:
+    """Schedule a callback: no-answer, busy, failed, zero duration, or voicemail."""
+    if voicemail_detected:
+        return True
     status = (twilio_status or "").lower()
     if status in UNANSWERED_TWILIO_STATUSES:
         return True

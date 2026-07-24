@@ -2,6 +2,8 @@
 Processes incoming leads from the Google Sheets webhook (or manual triggers).
 """
 
+from __future__ import annotations
+
 import logging
 
 from app.models.lead import Lead
@@ -14,9 +16,13 @@ logger = logging.getLogger(__name__)
 class LeadProcessor:
     """Webhook lead → outbound call."""
 
-    def __init__(self, dedup_store: DedupStore) -> None:
+    def __init__(
+        self,
+        dedup_store: DedupStore,
+        orchestrator: CallOrchestrator | None = None,
+    ) -> None:
         self._dedup = dedup_store
-        self._orchestrator = CallOrchestrator(dedup_store)
+        self._orchestrator = orchestrator or CallOrchestrator(dedup_store)
 
     async def process_incoming(self, lead: Lead) -> dict:
         """Process one lead pushed from Apps Script or a manual trigger."""

@@ -89,6 +89,15 @@ async def send_conversation_message(
     if not body:
         raise HTTPException(status_code=400, detail="Message body is required")
 
+    dedup_store = getattr(request.app.state, "dedup_store", None)
+    if dedup_store:
+        lead_row = dedup_store.get_latest_called_by_phone(to_number)
+        if lead_row and not lead_row.get("sms_eligible"):
+            raise HTTPException(
+                status_code=403,
+                detail="Transactional SMS consent is not Yes for this customer",
+            )
+
     try:
         result = await send_sms(to_number=to_number, body=body)
     except TwilioSmsError as exc:
@@ -133,13 +142,61 @@ async def list_calls(
     filter: str = Query("all", alias="filter"),
     limit: int = Query(500, ge=1, le=1000),
 ) -> dict:
-    allowed = {"all", "bill_uploaded", "no_bill", "sms_sent", "call_failed", "callback_active"}
+    allowed = {
+        "all",
+        "bill_uploaded",
+        "no_bill",
+        "sms_sent",
+        "call_failed",
+        "callback_active",
+        "report_sent",
+        "report_pending",
+        "followup_emails",
+        "self_booked",
+        # pipeline stages
+        "new",
+        "trying",
+        "reached",
+        "booked",
+        "confirmed",
+        "exhausted",
+        "failed",
+    }
     filter_by = (filter or "all").strip()
     if filter_by not in allowed:
-        raise HTTPException(status_code=400, detail=f"filter must be one of {sorted(allowed)}")
+        raise HTTPException(
+            status_code=400, detail=f"filter must be one of {sorted(allowed)}"
+        )
 
-    rows = _service().list_calls(q=q, filter_by=filter_by, limit=limit)
-    return {"calls": rows, "count": len(rows)}
+    svc = _service()
+    # Unfiltered (search only) for stage counts; then apply pipeline filter
+    all_rows = svc.list_calls(q=q, filter_by="all", limit=limit)
+    counts: dict = {s: 0 for s in (
+        "new", "trying", "reached", "booked", "self_booked", "report_sent",
+        "bill_uploaded", "confirmed", "exhausted", "failed",
+    )}
+    counts["all"] = len(all_rows)
+    counts["report_pending"] = 0
+    counts["callback_active"] = 0
+    counts["followup_emails"] = 0
+    for row in all_rows:
+        stage = row.get("pipeline_stage") or "new"
+        if stage in counts:
+            counts[stage] += 1
+        offer = (row.get("offer_page") or "").lower()
+        if offer in ("aps-hike", "zero-down") and not row.get("report_sent"):
+            counts["report_pending"] += 1
+        if row.get("callback_status") == "active":
+            counts["callback_active"] += 1
+        if (row.get("followup_email_status") or "").lower() == "active":
+            counts["followup_emails"] += 1
+
+    if filter_by == "all":
+        rows = all_rows
+    else:
+        rows = [r for r in all_rows if svc._matches_filter(r, filter_by)]
+
+    return {"calls": rows, "count": len(rows), "stage_counts": counts}
 
 
 @router.get("/messages")
@@ -177,6 +234,77 @@ async def get_call(row_key: str) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="Call not found")
     return row
+
+
+@router.get("/calls/{row_key}/timeline")
+async def get_call_timeline(row_key: str) -> dict:
+    svc = _service()
+    if not svc.get_call(row_key):
+        raise HTTPException(status_code=404, detail="Call not found")
+    events = svc.get_lead_timeline(row_key)
+    return {"row_key": row_key, "events": events, "count": len(events)}
+
+
+@router.post("/calls/{row_key}/cancel-followup-calls")
+async def cancel_followup_calls(row_key: str, request: Request) -> dict:
+    """Cancel pending follow-up (callback) calls for a lead."""
+    dedup_store = getattr(request.app.state, "dedup_store", None)
+    if not dedup_store:
+        raise HTTPException(status_code=503, detail="Dedup store not configured")
+    row = dedup_store.get_by_row_key(row_key)
+    if not row:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    cancelled = dedup_store.cancel_pending_callbacks(row_key=row_key)
+    from app.services.job_scheduler import cancel_pending_callback_jobs
+
+    tasks_deleted = cancel_pending_callback_jobs(
+        row_key, known_attempt=int(row.get("callback_attempt") or 0) or None
+    )
+    logger.info(
+        "Admin cancelled follow-up calls row_key=%s cancelled=%s tasks_deleted=%s",
+        row_key,
+        cancelled,
+        tasks_deleted,
+    )
+    return {
+        "ok": True,
+        "row_key": row_key,
+        "cancelled": cancelled,
+        "tasks_deleted": tasks_deleted,
+        "callback_status": "cancelled" if cancelled else row.get("callback_status"),
+    }
+
+
+@router.post("/calls/{row_key}/cancel-followup-emails")
+async def cancel_followup_emails(row_key: str, request: Request) -> dict:
+    """Cancel pending follow-up emails for a lead."""
+    dedup_store = getattr(request.app.state, "dedup_store", None)
+    if not dedup_store:
+        raise HTTPException(status_code=503, detail="Dedup store not configured")
+    row = dedup_store.get_by_row_key(row_key)
+    if not row:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    cancelled = dedup_store.cancel_followup_emails(row_key=row_key)
+    from app.services.job_scheduler import cancel_pending_followup_jobs
+
+    tasks_deleted = cancel_pending_followup_jobs(
+        row_key, known_attempt=int(row.get("followup_email_attempt") or 0)
+    )
+    logger.info(
+        "Admin cancelled follow-up emails row_key=%s cancelled=%s tasks_deleted=%s",
+        row_key,
+        cancelled,
+        tasks_deleted,
+    )
+    return {
+        "ok": True,
+        "row_key": row_key,
+        "cancelled": cancelled,
+        "tasks_deleted": tasks_deleted,
+        "followup_email_status": (
+            "cancelled" if cancelled else row.get("followup_email_status")
+        ),
+    }
 
 
 @router.get("/bills/{bill_id}/signed-url")

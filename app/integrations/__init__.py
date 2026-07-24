@@ -1,8 +1,3 @@
-from app.integrations.elevenlabs import ElevenLabsClient, ElevenLabsCallError
-from app.integrations.google_sheets import GoogleSheetsClient
+"""External integrations."""
 
-__all__ = [
-    "ElevenLabsClient",
-    "ElevenLabsCallError",
-    "GoogleSheetsClient",
-]
+__all__: list[str] = []

@@ -9,7 +9,10 @@ from __future__ import annotations
 import logging
 
 from app.config import get_settings
-from app.integrations.customer_notifications import send_confirmation_notification
+from app.integrations.customer_notifications import (
+    notification_channel,
+    send_confirmation_notification,
+)
 from app.services.message_logger import log_outbound_failure, log_outbound_message
 from app.utils.appointment_format import format_appointment_parts
 from app.utils.dedup_store import DedupStore
@@ -74,6 +77,13 @@ class BillUploadConfirmationSmsService:
             row.get("dial_to") or row.get("phone_no") or ""
         ).strip()
         email = (row.get("email") or "").strip()
+
+        if notification_channel() == "sms" and not row.get("sms_eligible"):
+            logger.info(
+                "Skip confirmation SMS — no transactional consent row_key=%s",
+                row_key,
+            )
+            return {"action": "skipped", "reason": "no_sms_consent"}
 
         if not self._store.claim_confirmation_sms_send(row_key):
             return {"action": "skipped", "reason": "already_sent"}

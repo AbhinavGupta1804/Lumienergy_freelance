@@ -4,10 +4,32 @@ import { useCallback, useEffect, useState } from "react";
 import {
   BillRow,
   CallRow,
+  StageCounts,
+  TimelineEvent,
+  cancelFollowupCalls,
+  cancelFollowupEmails,
   fetchBillSignedUrl,
   fetchCall,
   fetchCalls,
+  fetchLeadTimeline,
 } from "@/lib/api";
+
+const STAGE_CHIPS: { id: string; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "trying", label: "Trying" },
+  { id: "reached", label: "Reached" },
+  { id: "booked", label: "Booked" },
+  { id: "self_booked", label: "Self-booked" },
+  { id: "report_pending", label: "Report pending" },
+  { id: "report_sent", label: "Report sent" },
+  { id: "followup_emails", label: "Follow-up emails" },
+  { id: "bill_uploaded", label: "Bill uploaded" },
+  { id: "confirmed", label: "Confirmed" },
+  { id: "exhausted", label: "Exhausted" },
+  { id: "failed", label: "Failed" },
+];
+
+const FOLLOWUP_EMAIL_MAX = 4;
 
 function fmtDate(iso?: string | null) {
   if (!iso) return "—";
@@ -15,6 +37,22 @@ function fmtDate(iso?: string | null) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+/** Arizona business time — matches follow-up email scheduling. */
+function fmtAz(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const stamped = d.toLocaleString("en-US", {
+    timeZone: "America/Phoenix",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${stamped} AZ`;
 }
 
 function fmtDuration(secs?: number | null) {
@@ -39,40 +77,35 @@ function yesNo(val?: boolean | null) {
   return val ? "Yes" : "No";
 }
 
-function callStatusPill(row: CallRow) {
-  const val = String(row.call_successful || "").toLowerCase();
-  if (["true", "success", "yes", "1"].includes(val)) {
-    return <Pill label="Success" tone="green" />;
-  }
-  if (["false", "failure", "failed", "no", "0"].includes(val)) {
-    return <Pill label="Failed" tone="red" />;
-  }
-  if (row.call_successful) {
-    return <Pill label={String(row.call_successful)} tone="amber" />;
-  }
-  return <Pill label={row.status || "—"} tone="gray" />;
+function offerLabel(offer?: string | null) {
+  const o = (offer || "").toLowerCase();
+  if (o === "aps-hike") return "APS";
+  if (o === "zero-down") return "Zero Down";
+  if (o === "battery-rebate") return "Battery";
+  return offer || "—";
 }
 
-function callbackPill(row: CallRow) {
-  const st = (row.callback_status || "none").toLowerCase();
-  if (st === "answered") return <Pill label="Answered" tone="green" />;
-  if (st === "active") {
-    const next = row.next_retry_at ? fmtDate(row.next_retry_at) : "pending";
-    return <Pill label={`Active · ${next}`} tone="amber" />;
+function stageTone(
+  stage?: string,
+): "green" | "red" | "amber" | "blue" | "gray" | "purple" {
+  switch ((stage || "").toLowerCase()) {
+    case "confirmed":
+    case "booked":
+    case "self_booked":
+    case "bill_uploaded":
+      return "green";
+    case "trying":
+    case "report_sent":
+    case "reached":
+      return "amber";
+    case "exhausted":
+    case "failed":
+      return "red";
+    case "new":
+      return "blue";
+    default:
+      return "gray";
   }
-  if (st === "exhausted") return <Pill label="Exhausted" tone="red" />;
-  if (st === "none") return <Pill label="None" tone="gray" />;
-  return <Pill label={row.callback_status || "—"} tone="gray" />;
-}
-
-function billPill(count?: number) {
-  const n = count ?? 0;
-  if (n > 0) return <Pill label={`${n} file${n > 1 ? "s" : ""}`} tone="blue" />;
-  return <Pill label="None" tone="gray" />;
-}
-
-function smsPill(sent?: boolean) {
-  return sent ? <Pill label="Sent" tone="green" /> : <Pill label="No" tone="gray" />;
 }
 
 function Pill({
@@ -80,7 +113,7 @@ function Pill({
   tone,
 }: {
   label: string;
-  tone: "green" | "red" | "amber" | "blue" | "gray";
+  tone: "green" | "red" | "amber" | "blue" | "gray" | "purple";
 }) {
   const tones = {
     green: "bg-emerald-50 text-emerald-700",
@@ -88,10 +121,11 @@ function Pill({
     amber: "bg-amber-50 text-amber-800",
     blue: "bg-blue-50 text-blue-700",
     gray: "bg-gray-100 text-gray-600",
+    purple: "bg-violet-50 text-violet-700",
   };
   return (
     <span
-      className={`inline-block max-w-[140px] truncate rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`}
+      className={`inline-block max-w-[160px] truncate rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`}
       title={label}
     >
       {label}
@@ -99,25 +133,95 @@ function Pill({
   );
 }
 
+function stagePill(row: CallRow) {
+  const label = row.pipeline_label || row.pipeline_stage || "—";
+  return <Pill label={label} tone={stageTone(row.pipeline_stage)} />;
+}
+
+function reportPill(row: CallRow) {
+  if (row.report_sent) {
+    const t = (row.report_email_type || "").includes("without")
+      ? "No cal link"
+      : (row.report_email_type || "").includes("with")
+        ? "With cal"
+        : "Sent";
+    return <Pill label={t} tone="green" />;
+  }
+  const offer = (row.offer_page || "").toLowerCase();
+  if (offer === "aps-hike" || offer === "zero-down") {
+    return <Pill label="Pending" tone="amber" />;
+  }
+  return <Pill label="N/A" tone="gray" />;
+}
+
+function followupEmailPill(row: CallRow) {
+  const status = (row.followup_email_status || "none").toLowerCase();
+  const attempt = row.followup_email_attempt ?? 0;
+  if (status === "active") {
+    return (
+      <Pill
+        label={`${attempt}/${FOLLOWUP_EMAIL_MAX} · next`}
+        tone="amber"
+      />
+    );
+  }
+  if (status === "booked") return <Pill label="Stopped · booked" tone="green" />;
+  if (status === "cancelled") return <Pill label="Cancelled" tone="gray" />;
+  if (status === "exhausted") return <Pill label="Exhausted" tone="red" />;
+  if (status === "none" || !row.followup_email_status) {
+    return <Pill label="—" tone="gray" />;
+  }
+  return <Pill label={status} tone="gray" />;
+}
+
+function followupEmailSummary(row: CallRow) {
+  const status = (row.followup_email_status || "none").toLowerCase();
+  const attempt = row.followup_email_attempt ?? 0;
+  if (status === "active") {
+    const when = row.next_followup_email_at
+      ? fmtAz(row.next_followup_email_at)
+      : "time TBD";
+    return {
+      statusLabel: "Active",
+      attempts: `${attempt} of ${FOLLOWUP_EMAIL_MAX} sent`,
+      nextLabel: when,
+      remaining: Math.max(FOLLOWUP_EMAIL_MAX - attempt, 0),
+    };
+  }
+  if (status === "none" || !row.followup_email_status) {
+    return null;
+  }
+  return {
+    statusLabel: status.replace(/_/g, " "),
+    attempts: `${attempt} of ${FOLLOWUP_EMAIL_MAX} sent`,
+    nextLabel: "—",
+    remaining: 0,
+  };
+}
+
 export function CallsView() {
   const [calls, setCalls] = useState<CallRow[]>([]);
+  const [counts, setCounts] = useState<StageCounts>({});
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [detail, setDetail] = useState<CallRow | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewType, setPreviewType] = useState("");
+  const [cancelBusy, setCancelBusy] = useState<"calls" | "emails" | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await fetchCalls(search, filter);
       setCalls(data.calls);
+      setCounts(data.stage_counts || {});
       setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load calls");
+      setError(e instanceof Error ? e.message : "Failed to load leads");
     } finally {
       setLoading(false);
     }
@@ -131,11 +235,18 @@ export function CallsView() {
   useEffect(() => {
     if (!selectedKey) {
       setDetail(null);
+      setTimeline([]);
       return;
     }
-    fetchCall(selectedKey)
-      .then(setDetail)
-      .catch(() => setDetail(calls.find((c) => c.row_key === selectedKey) || null));
+    Promise.all([fetchCall(selectedKey), fetchLeadTimeline(selectedKey)])
+      .then(([d, t]) => {
+        setDetail(d);
+        setTimeline(t.events || []);
+      })
+      .catch(() => {
+        setDetail(calls.find((c) => c.row_key === selectedKey) || null);
+        setTimeline([]);
+      });
   }, [selectedKey, calls]);
 
   const viewBill = async (bill: BillRow) => {
@@ -157,62 +268,104 @@ export function CallsView() {
     }
   };
 
+  const doCancelFollowup = async (kind: "calls" | "emails") => {
+    if (!detail) return;
+    setCancelBusy(kind);
+    try {
+      if (kind === "calls") {
+        await cancelFollowupCalls(detail.row_key);
+      } else {
+        await cancelFollowupEmails(detail.row_key);
+      }
+      const fresh = await fetchCall(detail.row_key);
+      setDetail(fresh);
+      setError("");
+      load();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : `Could not cancel follow-up ${kind}`,
+      );
+    } finally {
+      setCancelBusy(null);
+    }
+  };
+
   return (
     <div className="flex h-full">
       <section className="flex w-[58%] flex-col border-r border-lumi-border bg-white">
-        <div className="flex gap-2 border-b border-lumi-border p-3">
-          <input
-            type="search"
-            placeholder="Search name, phone, address…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 rounded-lg border border-lumi-border px-3 py-2 text-sm"
-          />
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="rounded-lg border border-lumi-border px-2 py-2 text-sm"
-          >
-            <option value="all">All calls</option>
-            <option value="bill_uploaded">Bill uploaded</option>
-            <option value="no_bill">No bill</option>
-            <option value="sms_sent">SMS sent</option>
-            <option value="call_failed">Call failed</option>
-            <option value="callback_active">Callback scheduled</option>
-          </select>
-          <button
-            type="button"
-            onClick={load}
-            className="rounded-lg border border-lumi-border px-3 py-2 text-sm hover:bg-lumi-bg"
-          >
-            Refresh
-          </button>
+        <div className="border-b border-lumi-border p-3 space-y-3">
+          <div className="flex gap-2">
+            <input
+              type="search"
+              placeholder="Search name, phone, email, offer…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 rounded-lg border border-lumi-border px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={load}
+              className="rounded-lg border border-lumi-border px-3 py-2 text-sm hover:bg-lumi-bg"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {STAGE_CHIPS.map((chip) => {
+              const count =
+                chip.id === "all"
+                  ? counts.all
+                  : counts[chip.id];
+              const active = filter === chip.id;
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => setFilter(chip.id)}
+                  className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
+                    active
+                      ? "bg-lumi-blue text-white"
+                      : "bg-lumi-bg text-lumi-muted hover:text-gray-900"
+                  }`}
+                >
+                  {chip.label}
+                  {count != null ? (
+                    <span className={`ml-1 ${active ? "opacity-80" : ""}`}>
+                      {count}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </div>
+
         <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 bg-gray-50 text-xs text-lumi-muted">
               <tr>
-                <th className="px-3 py-2">Name</th>
-                <th className="px-3 py-2">Phone</th>
-                <th className="px-3 py-2">Date</th>
-                <th className="px-3 py-2">Duration</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">SMS</th>
-                <th className="px-3 py-2">Callback</th>
-                <th className="px-3 py-2">Bill</th>
+                <th className="px-3 py-2">Lead</th>
+                <th className="px-3 py-2">Offer</th>
+                <th className="px-3 py-2">Stage</th>
+                <th className="px-3 py-2">Call tries</th>
+                <th className="px-3 py-2">Report</th>
+                <th className="px-3 py-2">FU email</th>
+                <th className="px-3 py-2">Next FU email</th>
+                <th className="px-3 py-2">Appt</th>
+                <th className="px-3 py-2">Next action</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-lumi-muted">
+                  <td colSpan={9} className="px-3 py-6 text-center text-lumi-muted">
                     Loading…
                   </td>
                 </tr>
               ) : calls.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-lumi-muted">
-                    No calls found
+                  <td colSpan={9} className="px-3 py-6 text-center text-lumi-muted">
+                    No leads found
                   </td>
                 </tr>
               ) : (
@@ -227,18 +380,35 @@ export function CallsView() {
                       selectedKey === row.row_key ? "bg-blue-50" : ""
                     }`}
                   >
-                    <td className="px-3 py-2 font-medium">{row.name || "—"}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      {row.dial_to || row.phone_no || "—"}
+                    <td className="px-3 py-2">
+                      <div className="font-medium">{row.name || "—"}</div>
+                      <div className="text-xs text-lumi-muted whitespace-nowrap">
+                        {row.dial_to || row.phone_no || "—"}
+                      </div>
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-xs">
-                      {fmtDate(row.processed_at)}
+                    <td className="px-3 py-2 text-xs">{offerLabel(row.offer_page)}</td>
+                    <td className="px-3 py-2">{stagePill(row)}</td>
+                    <td className="px-3 py-2 text-center">
+                      {row.callback_attempt != null ? row.callback_attempt : "—"}
                     </td>
-                    <td className="px-3 py-2">{fmtDuration(row.call_duration_secs)}</td>
-                    <td className="px-3 py-2">{callStatusPill(row)}</td>
-                    <td className="px-3 py-2">{smsPill(row.sms_sent)}</td>
-                    <td className="px-3 py-2">{callbackPill(row)}</td>
-                    <td className="px-3 py-2">{billPill(row.bill_count)}</td>
+                    <td className="px-3 py-2">{reportPill(row)}</td>
+                    <td className="px-3 py-2">{followupEmailPill(row)}</td>
+                    <td
+                      className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap"
+                      title={row.next_followup_email_at || ""}
+                    >
+                      {(row.followup_email_status || "").toLowerCase() === "active"
+                        ? fmtAz(row.next_followup_email_at)
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs max-w-[100px] truncate" title={row.appointment_label || ""}>
+                      {row.appointment_label || (row.self_booked ? "Self" : "—")}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-gray-700 max-w-[200px]">
+                      <span className="line-clamp-2" title={row.next_action || ""}>
+                        {row.next_action || "—"}
+                      </span>
+                    </td>
                   </tr>
                 ))
               )}
@@ -246,86 +416,224 @@ export function CallsView() {
           </table>
         </div>
         {error && (
-          <p className="border-t border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</p>
+          <p className="border-t border-red-200 bg-red-50 p-2 text-sm text-red-700">
+            {error}
+          </p>
         )}
       </section>
 
       <section className="min-w-0 flex-1 overflow-auto bg-white">
         {!detail ? (
-          <p className="p-6 text-lumi-muted">Select a call to view details</p>
+          <p className="p-6 text-lumi-muted">Select a lead to view journey</p>
         ) : (
           <div className="p-6">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-bold">{detail.name || "Unknown"}</h2>
-                <p className="text-sm text-lumi-muted">{detail.row_key}</p>
+                <p className="text-sm text-lumi-muted">
+                  {offerLabel(detail.offer_page)}
+                  {detail.email ? ` · ${detail.email}` : ""}
+                </p>
               </div>
-              {callStatusPill(detail)}
+              {stagePill(detail)}
             </div>
+
+            <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                Next action
+              </p>
+              <p className="text-sm text-amber-950">{detail.next_action || "—"}</p>
+            </div>
+
+            {(() => {
+              const fu = followupEmailSummary(detail);
+              if (!fu) return null;
+              return (
+                <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-800">
+                    Follow-up emails
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-blue-700/80">
+                        Status
+                      </p>
+                      <p className="font-medium capitalize text-blue-950">
+                        {fu.statusLabel}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-blue-700/80">
+                        Attempts
+                      </p>
+                      <p className="font-medium text-blue-950">{fu.attempts}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-blue-700/80">
+                        Remaining
+                      </p>
+                      <p className="font-medium text-blue-950">
+                        {(detail.followup_email_status || "").toLowerCase() ===
+                        "active"
+                          ? fu.remaining
+                          : "—"}
+                      </p>
+                    </div>
+                    <div className="col-span-2 sm:col-span-1">
+                      <p className="text-[11px] uppercase tracking-wide text-blue-700/80">
+                        Next send
+                      </p>
+                      <p className="font-medium text-blue-950">{fu.nextLabel}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="mb-5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={
+                  detail.callback_status !== "active" || cancelBusy !== null
+                }
+                onClick={() => doCancelFollowup("calls")}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {cancelBusy === "calls"
+                  ? "Cancelling…"
+                  : detail.callback_status === "active"
+                    ? "Cancel pending follow-up calls"
+                    : detail.callback_status === "cancelled"
+                      ? "Follow-up calls cancelled"
+                      : "No pending follow-up calls"}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  detail.followup_email_status !== "active" ||
+                  cancelBusy !== null
+                }
+                onClick={() => doCancelFollowup("emails")}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {cancelBusy === "emails"
+                  ? "Cancelling…"
+                  : detail.followup_email_status === "active"
+                    ? "Cancel pending follow-up emails"
+                    : detail.followup_email_status === "cancelled"
+                      ? "Follow-up emails cancelled"
+                      : "No pending follow-up emails"}
+              </button>
+            </div>
+
+            <DetailSection title="Timeline">
+              {timeline.length === 0 ? (
+                <p className="text-sm text-lumi-muted">No activity yet.</p>
+              ) : (
+                <ol className="relative space-y-0 border-l border-lumi-border ml-2">
+                  {timeline.map((ev, i) => (
+                    <li key={`${ev.at}-${ev.type}-${i}`} className="relative pb-4 pl-4">
+                      <span className="absolute -left-1.5 top-1.5 h-3 w-3 rounded-full border-2 border-white bg-lumi-blue" />
+                      <p className="text-sm font-medium text-gray-900">{ev.title}</p>
+                      {ev.detail ? (
+                        <p className="text-xs text-lumi-muted mt-0.5">{ev.detail}</p>
+                      ) : null}
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {fmtDate(ev.at)}
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </DetailSection>
 
             <DetailSection title="Contact">
               <FieldGrid>
                 <Field label="Phone" value={detail.phone_no} />
                 <Field label="Dialled to" value={detail.dial_to} />
                 <Field label="Email" value={detail.email} />
+                <Field label="Offer page" value={offerLabel(detail.offer_page)} />
+                <Field
+                  label="Monthly bill"
+                  value={
+                    detail.monthly_bill != null
+                      ? `$${detail.monthly_bill}`
+                      : undefined
+                  }
+                />
                 <Field label="Address" value={detail.address} full />
               </FieldGrid>
             </DetailSection>
 
-            <DetailSection title="Call">
+            <DetailSection title="Pipeline">
               <FieldGrid>
-                <Field label="Call date" value={fmtDate(detail.processed_at)} />
-                <Field label="Call ended" value={fmtDate(detail.call_ended_at)} />
-                <Field label="Duration" value={fmtDuration(detail.call_duration_secs)} />
-                <Field label="Termination" value={detail.termination_reason} />
-                <Field label="In progress" value={yesNo(detail.call_in_progress)} />
-                <Field label="Last Twilio status" value={detail.last_twilio_status} />
-              </FieldGrid>
-            </DetailSection>
-
-            <DetailSection title="SMS & notifications">
-              <FieldGrid>
-                <Field label="SMS eligible" value={yesNo(detail.sms_eligible)} />
-                <Field label="Bill-upload SMS sent" value={yesNo(detail.sms_sent)} />
-                <Field label="Bill link used" value={yesNo(detail.upload_token_used)} />
+                <Field label="Stage" value={detail.pipeline_label} />
+                <Field label="Callback" value={detail.callback_status} />
                 <Field
-                  label="Confirmation SMS sent"
-                  value={yesNo(detail.confirmation_sms_sent)}
-                />
-              </FieldGrid>
-            </DetailSection>
-
-            <DetailSection title="Callback">
-              <div className="mb-3">{callbackPill(detail)}</div>
-              <FieldGrid>
-                <Field label="Status" value={detail.callback_status} />
-                <Field
-                  label="Attempts completed"
+                  label="Attempts"
                   value={
                     detail.callback_attempt != null
                       ? String(detail.callback_attempt)
                       : "—"
                   }
                 />
-                <Field label="Next retry at" value={fmtDate(detail.next_retry_at)} />
-                <Field label="First call at" value={fmtDate(detail.first_call_at)} />
+                <Field label="Next retry" value={fmtDate(detail.next_retry_at)} />
+                <Field label="Report sent" value={yesNo(detail.report_sent)} />
+                <Field
+                  label="Report type"
+                  value={(detail.report_email_type || "").replace(/_/g, " ") || undefined}
+                />
+                <Field label="Self-booked" value={yesNo(detail.self_booked)} />
+                <Field
+                  label="FU email status"
+                  value={
+                    detail.followup_email_status &&
+                    detail.followup_email_status !== "none"
+                      ? detail.followup_email_status
+                      : "—"
+                  }
+                />
+                <Field
+                  label="FU emails sent"
+                  value={
+                    detail.followup_email_status &&
+                    detail.followup_email_status !== "none"
+                      ? `${detail.followup_email_attempt ?? 0} / ${FOLLOWUP_EMAIL_MAX}`
+                      : "—"
+                  }
+                />
+                <Field
+                  label="Next FU email (AZ)"
+                  value={
+                    (detail.followup_email_status || "").toLowerCase() === "active"
+                      ? fmtAz(detail.next_followup_email_at)
+                      : "—"
+                  }
+                />
+                <Field label="Appointment" value={detail.appointment_label} full />
               </FieldGrid>
             </DetailSection>
 
-            <DetailSection title="Appointment">
+            <DetailSection title="Call details">
               <FieldGrid>
-                <Field label="Scheduled" value={detail.appointment_label} full />
-                <Field label="Start (ISO)" value={detail.appointment_start} />
-                <Field label="Cal.com booking" value={detail.cal_booking_uid} mono />
-                <Field label="Google event" value={detail.google_event_uid} mono />
+                <Field label="First call" value={fmtDate(detail.first_call_at)} />
+                <Field label="Last processed" value={fmtDate(detail.processed_at)} />
+                <Field label="Call ended" value={fmtDate(detail.call_ended_at)} />
+                <Field label="Duration" value={fmtDuration(detail.call_duration_secs)} />
+                <Field label="Termination" value={detail.termination_reason} />
+                <Field label="Twilio status" value={detail.last_twilio_status} />
               </FieldGrid>
             </DetailSection>
 
-            <DetailSection title="IDs">
+            <DetailSection title="SMS & notifications">
               <FieldGrid>
-                <Field label="Call SID" value={detail.call_sid} mono />
-                <Field label="Conversation ID" value={detail.conversation_id} mono />
-                <Field label="Sheet row #" value={detail.row_number?.toString()} />
+                <Field label="SMS eligible" value={yesNo(detail.sms_eligible)} />
+                <Field label="Bill-upload SMS" value={yesNo(detail.sms_sent)} />
+                <Field label="Bill link used" value={yesNo(detail.upload_token_used)} />
+                <Field
+                  label="Confirmation sent"
+                  value={yesNo(detail.confirmation_sms_sent)}
+                />
               </FieldGrid>
             </DetailSection>
 
@@ -388,6 +696,7 @@ export function CallsView() {
                     </button>
                   </div>
                   {previewType.startsWith("image/") ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img src={previewUrl} alt="Bill preview" className="mx-auto max-h-96" />
                   ) : previewType === "application/pdf" ? (
                     <iframe
@@ -402,6 +711,15 @@ export function CallsView() {
                   )}
                 </div>
               )}
+            </DetailSection>
+
+            <DetailSection title="IDs">
+              <FieldGrid>
+                <Field label="Row key" value={detail.row_key} mono />
+                <Field label="Call SID" value={detail.call_sid} mono />
+                <Field label="Conversation ID" value={detail.conversation_id} mono />
+                <Field label="Cal booking" value={detail.cal_booking_uid} mono />
+              </FieldGrid>
             </DetailSection>
           </div>
         )}

@@ -18,7 +18,7 @@
  *   - WEBHOOK_URL must match your current ngrok / PUBLIC_BASE_URL
  */
 
-const WEBHOOK_URL = 'https://maya-unanemic-honey.ngrok-free.dev/webhooks/sheets/new-lead';
+const WEBHOOK_URL = 'https://arizona-abhi-1084213388780.us-west4.run.app/webhooks/sheets/new-lead';
 const WEBHOOK_SECRET = 'lumi-sheets-wh-8f3c2a9e1b7d4f6a0c5e8b2d9f1a4c7e';
 const SHEET_NAME = 'Sheet1'; // must match GOOGLE_SHEETS_WORKSHEET_NAME in .env
 
@@ -28,6 +28,9 @@ const COLUMN_HEADERS = {
   address: 'Address',
   phone_no: 'Phone',
   email: 'Email',
+  transactional_sms_consent: 'Transactional SMS Consent',
+  offer_page: 'Offer Page',
+  monthly_bill: 'Monthly Bill',
 };
 
 /**
@@ -158,6 +161,13 @@ function extractLeadFields_(rowValues, headerIndex) {
     address: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.address),
     phone_no: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.phone_no),
     email: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.email),
+    transactional_sms_consent: getCellByHeader_(
+      rowValues,
+      headerIndex,
+      COLUMN_HEADERS.transactional_sms_consent
+    ),
+    offer_page: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.offer_page),
+    monthly_bill: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.monthly_bill),
   };
 }
 
@@ -192,6 +202,9 @@ function postLeadWebhook_(row, fields) {
     address: fields.address,
     phone_no: fields.phone_no,
     email: fields.email,
+    transactional_sms_consent: fields.transactional_sms_consent,
+    offer_page: fields.offer_page,
+    monthly_bill: fields.monthly_bill,
   };
   const options = {
     method: 'post',

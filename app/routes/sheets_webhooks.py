@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.integrations.customer_notifications import notification_channel
 from app.integrations.google_sheets import build_row_key
+from app.integrations.sheet_columns import parse_monthly_bill, parse_yes_no_consent
 from app.models.lead import Lead
 from app.services.lead_processor import LeadProcessor
 
@@ -30,6 +31,9 @@ class NewLeadBody(BaseModel):
     address: str = ""
     phone_no: str = ""
     email: str = ""
+    transactional_sms_consent: str = ""
+    offer_page: str = ""
+    monthly_bill: str = ""
 
     def to_lead(self) -> Lead:
         from datetime import datetime, timezone
@@ -39,6 +43,8 @@ class NewLeadBody(BaseModel):
         address = self.address.strip()
         phone_no = self.phone_no.strip()
         email = self.email.strip()
+        offer_page = self.offer_page.strip().lower()
+        monthly_bill = parse_monthly_bill(self.monthly_bill)
         row_key = build_row_key(
             self.row_number, first_name, last_name, address, phone_no
         )
@@ -51,6 +57,11 @@ class NewLeadBody(BaseModel):
             email=email,
             row_key=row_key,
             detected_at=datetime.now(timezone.utc),
+            transactional_sms_consent=parse_yes_no_consent(
+                self.transactional_sms_consent
+            ),
+            offer_page=offer_page,
+            monthly_bill=monthly_bill,
         )
 
 
@@ -108,7 +119,13 @@ async def sheets_new_lead(
 
     processor: LeadProcessor = request.app.state.lead_processor
     background_tasks.add_task(_process_lead_task, processor, lead)
-    logger.info("Sheets webhook accepted row %s (%s) email=%s", lead.row_number, lead.full_name, lead.email or "(empty)")
+    logger.info(
+        "Sheets webhook accepted row %s (%s) email=%s sms_consent=%s",
+        lead.row_number,
+        lead.full_name,
+        lead.email or "(empty)",
+        "yes" if lead.transactional_sms_consent else "no",
+    )
 
     return {
         "accepted": True,

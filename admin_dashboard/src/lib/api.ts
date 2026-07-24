@@ -28,6 +28,13 @@ export type Conversation = {
   last_direction?: string;
 };
 
+export type TimelineEvent = {
+  at?: string | null;
+  type: string;
+  title: string;
+  detail?: string;
+};
+
 export type CallRow = {
   row_key: string;
   row_number?: number;
@@ -59,6 +66,17 @@ export type CallRow = {
   cal_booking_uid?: string;
   google_event_uid?: string;
   transcript_summary?: string;
+  offer_page?: string;
+  monthly_bill?: number | null;
+  report_sent?: boolean;
+  report_email_type?: string;
+  self_booked?: boolean;
+  followup_email_status?: string;
+  followup_email_attempt?: number;
+  next_followup_email_at?: string;
+  pipeline_stage?: string;
+  pipeline_label?: string;
+  next_action?: string;
   bill_count?: number;
   bills?: BillRow[];
   [key: string]: unknown;
@@ -72,6 +90,8 @@ export type BillRow = {
   size_bytes?: number;
   status?: string;
 };
+
+export type StageCounts = Record<string, number>;
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -117,13 +137,40 @@ export function sendMessage(phone: string, body: string) {
 
 export function fetchCalls(q = "", filter = "all") {
   const params = new URLSearchParams({ q, filter });
-  return apiFetch<{ calls: CallRow[]; count: number }>(
-    `/api/admin/calls?${params}`,
-  );
+  return apiFetch<{
+    calls: CallRow[];
+    count: number;
+    stage_counts?: StageCounts;
+  }>(`/api/admin/calls?${params}`);
 }
 
 export function fetchCall(rowKey: string) {
   return apiFetch<CallRow>(`/api/admin/calls/${encodeURIComponent(rowKey)}`);
+}
+
+export function fetchLeadTimeline(rowKey: string) {
+  return apiFetch<{
+    row_key: string;
+    events: TimelineEvent[];
+    count: number;
+  }>(`/api/admin/calls/${encodeURIComponent(rowKey)}/timeline`);
+}
+
+export function cancelFollowupCalls(rowKey: string) {
+  return apiFetch<{ ok: boolean; cancelled: boolean; callback_status?: string }>(
+    `/api/admin/calls/${encodeURIComponent(rowKey)}/cancel-followup-calls`,
+    { method: "POST" },
+  );
+}
+
+export function cancelFollowupEmails(rowKey: string) {
+  return apiFetch<{
+    ok: boolean;
+    cancelled: boolean;
+    followup_email_status?: string;
+  }>(`/api/admin/calls/${encodeURIComponent(rowKey)}/cancel-followup-emails`, {
+    method: "POST",
+  });
 }
 
 export function fetchBillSignedUrl(billId: number, download = false) {

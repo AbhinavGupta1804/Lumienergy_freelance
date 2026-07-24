@@ -24,6 +24,9 @@ class Lead:
     email: str
     row_key: str
     detected_at: datetime
+    transactional_sms_consent: bool = False
+    offer_page: str = ""
+    monthly_bill: float = 0.0
 
     @property
     def full_name(self) -> str:

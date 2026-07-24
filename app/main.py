@@ -24,9 +24,11 @@ from app.config import get_settings
 from app.routes import (
     admin,
     bill_upload_webhooks,
+    calcom_webhooks,
     calls,
     elevenlabs_webhooks,
     health,
+    internal_jobs,
     lumi_webhooks,
     scheduling,
     sheets_webhooks,
@@ -34,9 +36,9 @@ from app.routes import (
 )
 from app.services.bill_upload_confirmation_sms import BillUploadConfirmationSmsService
 from app.services.call_orchestrator import CallOrchestrator
-from app.services.callback_scheduler import create_callback_scheduler
 from app.services.callback_service import CallbackService
 from app.services.lead_processor import LeadProcessor
+from app.services.post_call_report import PostCallReportService
 from app.services.post_call_sms import PostCallSmsService
 from app.utils.dedup_store import DedupStore
 from app.utils.logging import setup_logging
@@ -53,13 +55,14 @@ async def lifespan(app: FastAPI):
 
     dedup_store = DedupStore(settings.dedup_db_path)
     message_store = CustomerMessageStore(settings.dedup_db_path)
-    lead_processor = LeadProcessor(dedup_store)
-    call_orchestrator = CallOrchestrator(dedup_store)
+    post_call_report = PostCallReportService(dedup_store, message_store)
+    call_orchestrator = CallOrchestrator(dedup_store, report_service=post_call_report)
+    lead_processor = LeadProcessor(dedup_store, orchestrator=call_orchestrator)
     post_call_sms = PostCallSmsService(dedup_store, message_store)
     bill_upload_confirmation_sms = BillUploadConfirmationSmsService(
         dedup_store, message_store
     )
-    callback_service = CallbackService(dedup_store)
+    callback_service = CallbackService(dedup_store, report_service=post_call_report)
 
     app.state.dedup_store = dedup_store
     app.state.message_store = message_store
@@ -68,20 +71,16 @@ async def lifespan(app: FastAPI):
     app.state.post_call_sms_service = post_call_sms
     app.state.bill_upload_confirmation_sms_service = bill_upload_confirmation_sms
     app.state.callback_service = callback_service
+    app.state.post_call_report_service = post_call_report
 
-    scheduler = None
-    scheduler = create_callback_scheduler(dedup_store, call_orchestrator)
-    if scheduler:
-        scheduler.start()
-        logger.info(
-            "Callback scheduler started (every %ss)",
-            settings.callback_scheduler_interval_seconds,
-        )
+    from app.integrations.cloud_tasks import use_cloud_tasks
+
+    logger.info(
+        "Job backend=%s (callbacks + follow-up emails)",
+        "cloud_tasks" if use_cloud_tasks() else "none — set GCP Cloud Tasks env to enable",
+    )
 
     yield
-
-    if scheduler:
-        scheduler.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:
@@ -113,7 +112,9 @@ def create_app() -> FastAPI:
     app.include_router(lumi_webhooks.router)
     app.include_router(elevenlabs_webhooks.router)
     app.include_router(bill_upload_webhooks.router)
+    app.include_router(calcom_webhooks.router)
     app.include_router(admin.router)
+    app.include_router(internal_jobs.router)
 
     # Legacy static admin (optional) — Next.js runs on :3000
     legacy_static = (

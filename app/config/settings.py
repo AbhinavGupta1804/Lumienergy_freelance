@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     sheets_col_address: str = "Address"
     sheets_col_phone: str = "Phone"
     sheets_col_email: str = "Email"
+    sheets_col_sms_consent: str = "Transactional SMS Consent"
+    sheets_col_offer_page: str = "Offer Page"
+    sheets_col_monthly_bill: str = "Monthly Bill"
+
+    # --- Google Maps (roof satellite snapshot for reports) ---
+    google_api_key: str = ""  # Maps Static API (and optional Geocoding)
 
     # --- Testing overrides ---
     # When true, ignore phone_no column and always dial TEST_CALL_NUMBER
@@ -77,7 +83,10 @@ class Settings(BaseSettings):
     sms_message_body: str = ""
     sms_support_phone: str = "+1 (480) 252-6872"
 
-    # --- Email (SMTP) — used when NOTIFICATION_CHANNEL=email ---
+    # --- Email — used when NOTIFICATION_CHANNEL=email ---
+    # Prefer Resend when RESEND_API_KEY is set; otherwise SMTP.
+    resend_api_key: str = ""
+    resend_from_email: str = "support@lumienergy.us"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
@@ -103,6 +112,8 @@ class Settings(BaseSettings):
     # --- Cal.com scheduling (proxy used by ElevenLabs get_available_slots tool) ---
     cal_api_key: str = ""  # Cal.com API key (Bearer token)
     cal_event_type_id: str = ""  # Event type to check / book
+    cal_booking_page_url: str = ""  # Public Cal.com booking page for self-scheduling
+    calcom_webhook_secret: str = ""  # Verify Cal.com webhook signatures (optional)
     business_timezone: str = "America/Phoenix"  # Arizona — no DST
     # How far ahead to allow date parsing (e.g. "next Tuesday" capped to 60 days)
     scheduling_max_days_ahead: int = 60
@@ -122,16 +133,35 @@ class Settings(BaseSettings):
     # Channel webhook: Server Settings → Integrations → Webhooks → New Webhook → Copy URL
     discord_webhook_url: str = ""
 
-    # --- Callback retry scheduler ---
+    # --- Callback retries (scheduled via Cloud Tasks) ---
     callback_enabled: bool = True
     callback_max_days: int = 7
-    callback_scheduler_interval_seconds: int = 60
     callback_morning_hour: int = 9
     callback_evening_hour: int = 19
     callback_evening_cutoff_hour: int = 20
     callback_stale_in_progress_minutes: int = 45
-    # Reconcile via Twilio when EL post-call webhook never arrives
+    # Reconcile via Twilio when EL post-call webhook never arrives (manual/admin use)
     callback_reconcile_after_minutes: int = 3
+
+    # --- Report follow-up emails (unbooked leads) ---
+    followup_email_enabled: bool = True
+    followup_email_max_attempts: int = 4
+    followup_email_interval_days: int = 2
+    followup_email_send_hour: int = 8  # 08:30 business timezone
+    followup_email_send_minute: int = 30
+
+    # --- Cloud Tasks job backend ---
+    # auto = use Cloud Tasks when project/queue/secret/public URL are set
+    job_scheduler_backend: str = "auto"  # auto | cloud_tasks | off
+    gcp_project_id: str = ""
+    gcp_location: str = "us-west4"
+    cloud_tasks_queue: str = "lumi-jobs"
+    # Shared secret Cloud Tasks sends as X-Internal-Jobs-Secret
+    internal_jobs_secret: str = ""
+    # Optional: OIDC service account email for Cloud Tasks → Cloud Run auth
+    cloud_tasks_invoker_sa: str = ""
+    # Optional JSON key for Cloud Tasks only. Prefer ADC on Cloud Run (no key).
+    cloud_tasks_service_account_json: str = ""
 
     # --- Retry (ElevenLabs API) ---
     max_call_retries: int = 3

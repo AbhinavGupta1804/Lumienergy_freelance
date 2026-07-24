@@ -9,9 +9,10 @@ python-dotenv>=1.0.1
 # HTTP client (ElevenLabs API)
 httpx>=0.27.0
 
-# Google Sheets API
+# Google Sheets API + Cloud Tasks
 google-api-python-client>=2.150.0
 google-auth>=2.35.0
+google-cloud-tasks>=2.16.0
 
 # Natural-language date parsing ("tomorrow", "Tuesday evening", "next Friday")
 python-dateutil>=2.9.0
@@ -20,5 +21,7 @@ dateparser>=1.2.0
 # Supabase Postgres (when DATABASE_BACKEND=supabase)
 supabase>=2.10.0
 
-# Callback retry scheduler
-APScheduler>=3.10.4
+# Preliminary solar report PDF
+jinja2>=3.1.0
+matplotlib>=3.8.0
+playwright>=1.40.0

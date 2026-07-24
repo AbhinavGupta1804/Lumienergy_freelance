@@ -1,5 +1,6 @@
 .venv
 __pycache__
+**/__pycache__
 *.pyc
 .git
 .env
@@ -12,3 +13,16 @@ bill_upload/
 terminals/
 agent-tools/
 agent-transcripts/
+
+# Admin is Next.js — API image only needs source if anything; never build artifacts
+admin_dashboard/node_modules
+admin_dashboard/.next
+admin_dashboard/out
+**/node_modules
+**/.next
+
+# Local noise
+*.png
+*.pdf
+*.pack.gz
+.dockerignore

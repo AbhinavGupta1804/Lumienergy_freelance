@@ -5,6 +5,7 @@ Status Callback (POST /webhooks/twilio/status)
 ----------------------------------------------
 Twilio POSTs when call progress events occur. We subscribe to ``completed`` only.
 On completed + sms_eligible, PostCallSmsService sends the bill-upload SMS.
+Bill-upload SMS is sent at Step 6b via mark_bill_sms_ready tool, not here.
 
 Configure per-call via attach_status_callback() after ElevenLabs starts the call,
 and/or set the same URL on your Twilio phone number in Console for redundancy.

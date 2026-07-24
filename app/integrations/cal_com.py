@@ -117,6 +117,14 @@ class CalComClient:
             raise CalComError(f"Invalid phone for Cal.com attendee email: {phone!r}")
         return f"{digits}@sms.cal.com"
 
+    @staticmethod
+    def resolve_attendee_email(*, email: str = "", phone: str = "") -> str:
+        """Prefer real customer email; fall back to phone placeholder for SMS-only."""
+        cleaned = (email or "").strip()
+        if cleaned and "@" in cleaned and not cleaned.lower().endswith("@sms.cal.com"):
+            return cleaned
+        return CalComClient.phone_to_attendee_email(phone)
+
     async def create_booking(
         self,
         *,
@@ -124,10 +132,14 @@ class CalComClient:
         full_name: str,
         phone: str,
         address: str,
+        email: str = "",
         metadata: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Create a Cal.com booking with full customer name and home address.
+
+        Uses the lead's real email when available so Cal.com can send a calendar
+        invite to the customer. Falls back to ``{digits}@sms.cal.com`` otherwise.
 
         Returns the booking ``uid`` and Google Calendar ``eventUid`` when available.
         """
@@ -136,12 +148,14 @@ class CalComClient:
         if not address.strip():
             raise CalComError("address is required for booking")
 
+        attendee_email = self.resolve_attendee_email(email=email, phone=phone)
+
         payload: dict[str, Any] = {
             "eventTypeId": int(self._event_type_id),
             "start": start,
             "attendee": {
                 "name": full_name.strip(),
-                "email": self.phone_to_attendee_email(phone),
+                "email": attendee_email,
                 "timeZone": self._timezone,
                 "phoneNumber": phone,
             },
@@ -171,9 +185,10 @@ class CalComClient:
 
         google_event_uid = await self._google_event_uid_for_booking(str(booking_uid))
         logger.info(
-            "Cal.com booking created uid=%s attendee=%r address=%r",
+            "Cal.com booking created uid=%s attendee=%r email=%s address=%r",
             booking_uid,
             full_name,
+            attendee_email,
             address[:60],
         )
         return {

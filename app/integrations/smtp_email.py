@@ -1,9 +1,10 @@
 """
-Send transactional email via SMTP (Gmail, Google Workspace, SendGrid SMTP, etc.).
+Send transactional email — Resend (preferred) or SMTP fallback.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import smtplib
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class SmtpEmailError(Exception):
-    """SMTP is not configured or send failed."""
+    """Email is not configured or send failed (SMTP or Resend)."""
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class EmailSendResult:
     success: bool
     to_email: str = ""
     error: str = ""
+    provider_id: str = ""
 
 
 def _send_smtp_sync(
@@ -67,7 +69,7 @@ def _send_smtp_sync(
         logger.error("SMTP connection failed to=%s: %s", to_email, exc)
         return EmailSendResult(success=False, to_email=to_email, error=str(exc))
 
-    logger.info("Email sent successfully to=%s subject=%s", to_email, subject[:60])
+    logger.info("Email sent successfully (SMTP) to=%s subject=%s", to_email, subject[:60])
     return EmailSendResult(success=True, to_email=to_email)
 
 
@@ -76,13 +78,40 @@ async def send_email(
     to_email: str,
     subject: str,
     body_text: str,
+    attachments: list[dict] | None = None,
 ) -> EmailSendResult:
-    """Send one plain-text email (runs SMTP in a thread — smtplib is blocking)."""
-    import asyncio
+    """
+    Send one plain-text email.
 
+    Uses Resend when RESEND_API_KEY is set; otherwise SMTP.
+    attachments are only supported via Resend (ignored on SMTP).
+    """
     to_email = (to_email or "").strip()
     if not to_email or "@" not in to_email:
         return EmailSendResult(success=False, to_email=to_email, error="invalid_email")
+
+    settings = get_settings()
+    if (settings.resend_api_key or "").strip():
+        from app.integrations.resend_email import ResendEmailError, send_email_resend
+
+        try:
+            result = await send_email_resend(
+                to_email=to_email,
+                subject=subject,
+                body_text=body_text,
+                attachments=attachments,
+            )
+        except ResendEmailError as exc:
+            raise SmtpEmailError(str(exc)) from exc
+        return EmailSendResult(
+            success=result.success,
+            to_email=result.to_email,
+            error=result.error,
+            provider_id=result.provider_id,
+        )
+
+    if attachments:
+        logger.warning("Email attachments ignored on SMTP path — configure RESEND_API_KEY")
 
     return await asyncio.to_thread(
         _send_smtp_sync,

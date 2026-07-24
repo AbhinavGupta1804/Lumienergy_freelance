@@ -2,7 +2,7 @@
 Cal.com booking + Google Calendar enrichment for Lumi outbound calls.
 
 During the call the agent books via POST /scheduling/book (Cal.com-shaped body;
-full name + address come from the lead DB row, not the tool).
+full name, address, and email come from the lead DB row, not the tool).
 After the call ends, the ElevenLabs webhook appends the call summary to the
 calendar event description.
 """
@@ -50,11 +50,12 @@ def resolve_lead_for_booking(
     store: DedupStore,
     phone_no: str,
 ) -> dict[str, str]:
-    """Load full name + address from the outbound-call row for this phone."""
+    """Load full name, address, and email from the outbound-call row for this phone."""
     row = store.get_latest_called_by_phone(phone_no) or {}
     return {
         "full_name": (row.get("name") or "").strip(),
         "address": (row.get("address") or "").strip(),
+        "email": (row.get("email") or "").strip(),
         "phone_no": (row.get("phone_no") or row.get("dial_to") or phone_no).strip(),
         "conversation_id": (row.get("conversation_id") or "").strip(),
     }
@@ -67,6 +68,7 @@ async def book_appointment(
     phone_no: str,
     full_name: str = "",
     address: str = "",
+    email: str = "",
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Create Cal.com booking and persist calendar IDs for post-call summary."""
@@ -75,6 +77,7 @@ async def book_appointment(
     lead = resolve_lead_for_booking(store, phone_no)
     full_name = (full_name or lead["full_name"]).strip()
     address = (address or lead["address"]).strip()
+    email = (email or lead["email"]).strip()
     phone_no = (phone_no or lead["phone_no"]).strip()
     if not full_name:
         raise CalComError("Could not resolve customer name for booking")
@@ -98,6 +101,7 @@ async def book_appointment(
         full_name=full_name,
         phone=phone_no,
         address=address,
+        email=email,
         metadata=metadata or None,
     )
 
