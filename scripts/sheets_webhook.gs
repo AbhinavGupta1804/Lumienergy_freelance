@@ -30,6 +30,7 @@ const COLUMN_HEADERS = {
   email: 'Email',
   transactional_sms_consent: 'Transactional SMS Consent',
   offer_page: 'Offer Page',
+  form_source: 'Form Source',
   monthly_bill: 'Monthly Bill',
 };
 
@@ -155,6 +156,9 @@ function getCellByHeader_(rowValues, headerIndex, headerName) {
 }
 
 function extractLeadFields_(rowValues, headerIndex) {
+  const offerPage = getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.offer_page);
+  const formSource = getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.form_source);
+  // Main-site forms sometimes put the slug in Form Source and leave Offer Page blank.
   return {
     first_name: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.first_name),
     last_name: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.last_name),
@@ -166,7 +170,7 @@ function extractLeadFields_(rowValues, headerIndex) {
       headerIndex,
       COLUMN_HEADERS.transactional_sms_consent
     ),
-    offer_page: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.offer_page),
+    offer_page: offerPage || formSource,
     monthly_bill: getCellByHeader_(rowValues, headerIndex, COLUMN_HEADERS.monthly_bill),
   };
 }

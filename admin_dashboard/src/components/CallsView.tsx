@@ -82,8 +82,17 @@ function offerLabel(offer?: string | null) {
   if (o === "aps-hike") return "APS";
   if (o === "zero-down") return "Zero Down";
   if (o === "battery-rebate") return "Battery";
+  if (o === "solar-roi-calculator") return "Solar ROI";
+  if (o === "getquote") return "Get Quote";
   return offer || "—";
 }
+
+const REPORT_ELIGIBLE_OFFERS = new Set([
+  "aps-hike",
+  "zero-down",
+  "solar-roi-calculator",
+  "getquote",
+]);
 
 function stageTone(
   stage?: string,
@@ -148,7 +157,7 @@ function reportPill(row: CallRow) {
     return <Pill label={t} tone="green" />;
   }
   const offer = (row.offer_page || "").toLowerCase();
-  if (offer === "aps-hike" || offer === "zero-down") {
+  if (REPORT_ELIGIBLE_OFFERS.has(offer)) {
     return <Pill label="Pending" tone="amber" />;
   }
   return <Pill label="N/A" tone="gray" />;

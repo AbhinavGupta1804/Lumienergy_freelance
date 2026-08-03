@@ -10,6 +10,7 @@ import logging
 from typing import Any
 
 from app.config import get_settings
+from app.services.post_call_report import REPORT_ELIGIBLE_OFFERS
 from app.utils.phone import normalize_e164
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ class AdminService:
             if stage in counts:
                 counts[stage] += 1
             offer = (row.get("offer_page") or "").lower()
-            if offer in ("aps-hike", "zero-down") and not row.get("report_sent"):
+            if offer in REPORT_ELIGIBLE_OFFERS and not row.get("report_sent"):
                 counts["report_pending"] += 1
             if row.get("callback_status") == "active":
                 counts["callback_active"] += 1
@@ -604,7 +605,7 @@ class AdminService:
         if (row.get("status") or "").lower() == "failed":
             return "Dial failed — check phone number"
         offer = (row.get("offer_page") or "").lower()
-        if offer in ("aps-hike", "zero-down") and not row.get("report_sent"):
+        if offer in REPORT_ELIGIBLE_OFFERS and not row.get("report_sent"):
             return "Awaiting call end → report email"
         return "New lead — awaiting first outcome"
 
@@ -643,7 +644,7 @@ class AdminService:
             return bool(row.get("report_sent"))
         if filter_by == "report_pending":
             offer = (row.get("offer_page") or "").lower()
-            return offer in ("aps-hike", "zero-down") and not row.get("report_sent")
+            return offer in REPORT_ELIGIBLE_OFFERS and not row.get("report_sent")
         if filter_by == "self_booked":
             return bool(row.get("self_booked"))
         if filter_by == "followup_emails":

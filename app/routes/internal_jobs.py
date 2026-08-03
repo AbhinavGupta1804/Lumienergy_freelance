@@ -34,6 +34,21 @@ class CallbackDialBody(BaseModel):
     expected_attempt: int = Field(1, ge=0)
 
 
+class ProcessLeadBody(BaseModel):
+    """Same fields as Sheets new-lead webhook (Cloud Tasks delivery)."""
+
+    row_number: int = Field(..., ge=2)
+    first_name: str = ""
+    last_name: str = ""
+    address: str = ""
+    phone_no: str = ""
+    email: str = ""
+    transactional_sms_consent: str = ""
+    offer_page: str = ""
+    monthly_bill: str = ""
+    row_key: str = ""
+
+
 def _verify_secret(header_value: str | None) -> None:
     settings = get_settings()
     expected = (settings.internal_jobs_secret or "").strip()
@@ -41,6 +56,48 @@ def _verify_secret(header_value: str | None) -> None:
         raise HTTPException(status_code=503, detail="INTERNAL_JOBS_SECRET not configured")
     if not header_value or header_value.strip() != expected:
         raise HTTPException(status_code=401, detail="Invalid job secret")
+
+
+@router.post("/process-lead")
+async def run_process_lead(
+    body: ProcessLeadBody,
+    request: Request,
+    x_internal_jobs_secret: str | None = Header(default=None),
+) -> JSONResponse:
+    """Dial the lead and send dial-fail report email if the call never starts."""
+    _verify_secret(x_internal_jobs_secret)
+
+    from app.routes.sheets_webhooks import NewLeadBody
+
+    lead_body = NewLeadBody(
+        row_number=body.row_number,
+        first_name=body.first_name,
+        last_name=body.last_name,
+        address=body.address,
+        phone_no=body.phone_no,
+        email=body.email,
+        transactional_sms_consent=body.transactional_sms_consent,
+        offer_page=body.offer_page,
+        monthly_bill=body.monthly_bill,
+    )
+    lead = lead_body.to_lead()
+    processor = request.app.state.lead_processor
+    logger.info(
+        "Cloud Tasks process-lead starting row=%s offer_page=%r email=%s",
+        lead.row_number,
+        lead.offer_page,
+        lead.email or "(empty)",
+    )
+    try:
+        result = await processor.process_incoming(lead)
+    except Exception as exc:
+        logger.exception("Cloud Tasks process-lead failed row=%s", lead.row_number)
+        return JSONResponse(
+            {"ok": False, "error": str(exc), "row_key": lead.row_key},
+            status_code=500,
+        )
+    logger.info("Cloud Tasks process-lead done row=%s result=%s", lead.row_number, result)
+    return JSONResponse({"ok": True, "row_key": lead.row_key, **result})
 
 
 @router.post("/followup-email")

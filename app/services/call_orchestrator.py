@@ -45,7 +45,18 @@ class CallOrchestrator:
 
     async def _send_report_on_dial_fail(self, row_key: str) -> None:
         if not self._report:
+            logger.warning(
+                "Dial-fail report skipped — report service not wired row_key=%s",
+                row_key,
+            )
             return
+        row = self._dedup.get_by_row_key(row_key) or {}
+        logger.info(
+            "Dial-fail report starting row_key=%s offer_page=%r email=%s",
+            row_key,
+            row.get("offer_page") or "",
+            (row.get("email") or "").strip() or "(empty)",
+        )
         try:
             result = await self._report.on_dial_failed(row_key)
             logger.info("Dial-fail report email row_key=%s: %s", row_key, result)

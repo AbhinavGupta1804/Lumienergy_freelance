@@ -1,10 +1,13 @@
 """
-Post-call report email service for APS / Zero Down landing page leads.
+Post-call report email service for eligible landing-page leads.
 
 After a call ends (or if the dial fails before a conversation starts), generates
 a personalized preliminary solar analysis PDF and emails it to the customer.
 The email conditionally includes a Cal.com self-scheduling link depending on
 whether an appointment was booked during the call.
+
+Eligible Offer Page values (sheet):
+  aps-hike, zero-down, solar-roi-calculator, getquote
 
 Cases:
   1. Picked + booked  --> report WITHOUT calendar link
@@ -33,7 +36,12 @@ from app.utils.message_store import CustomerMessageStore
 
 logger = logging.getLogger(__name__)
 
-REPORT_ELIGIBLE_OFFERS = frozenset({"aps-hike", "zero-down"})
+REPORT_ELIGIBLE_OFFERS = frozenset({
+    "aps-hike",
+    "zero-down",
+    "solar-roi-calculator",
+    "getquote",
+})
 
 _CAL_LINK_LABEL = "Book your free home consult"
 
@@ -282,8 +290,16 @@ class PostCallReportService:
         *,
         context: str = "",
     ) -> dict[str, Any]:
-        offer_page = (row.get("offer_page") or "").strip().lower()
+        from app.integrations.sheet_columns import normalize_offer_page
+
+        offer_page = normalize_offer_page(row.get("offer_page"))
         if offer_page not in REPORT_ELIGIBLE_OFFERS:
+            logger.info(
+                "Report skipped not_report_eligible row_key=%s offer_page=%r eligible=%s",
+                row.get("row_key"),
+                offer_page,
+                sorted(REPORT_ELIGIBLE_OFFERS),
+            )
             return {
                 "action": "skipped",
                 "reason": "not_report_eligible",

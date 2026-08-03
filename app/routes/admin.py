@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.integrations.twilio_sms import TwilioSmsError, send_sms
 from app.services.admin_service import AdminServiceError, get_admin_service
 from app.services.message_logger import log_outbound_failure, log_outbound_message
+from app.services.post_call_report import REPORT_ELIGIBLE_OFFERS
 from app.utils.phone import normalize_e164
 from app.utils.ws_hub import admin_ws_hub
 
@@ -184,7 +185,7 @@ async def list_calls(
         if stage in counts:
             counts[stage] += 1
         offer = (row.get("offer_page") or "").lower()
-        if offer in ("aps-hike", "zero-down") and not row.get("report_sent"):
+        if offer in REPORT_ELIGIBLE_OFFERS and not row.get("report_sent"):
             counts["report_pending"] += 1
         if row.get("callback_status") == "active":
             counts["callback_active"] += 1

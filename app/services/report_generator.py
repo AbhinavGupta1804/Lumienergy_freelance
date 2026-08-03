@@ -134,7 +134,10 @@ class ReportGenerator:
             ) from exc
 
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            # --no-sandbox / shm: required in Docker & Cloud Run containers
+            browser = p.chromium.launch(
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
             page = browser.new_page()
             page.set_content(html, wait_until="networkidle")
             page.evaluate("() => document.fonts.ready")

@@ -30,6 +30,42 @@ def callback_task_id(row_key: str, attempt: int) -> str:
     return f"cb-{row_key}-a{attempt}"
 
 
+def process_lead_task_id(row_key: str) -> str:
+    return f"pl-{row_key}"
+
+
+def schedule_process_lead_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Enqueue outbound dial (+ dial-fail report) as its own Cloud Run request.
+
+    Sheets webhooks must not rely on FastAPI BackgroundTasks under request-based
+    Cloud Run billing — CPU stops after the HTTP response and PDF/email dies.
+    """
+    from datetime import datetime, timezone
+
+    row_number = payload.get("row_number")
+    row_key = str(payload.get("row_key") or f"row-{row_number}")
+    if not use_cloud_tasks():
+        logger.warning(
+            "Process-lead not enqueued — Cloud Tasks not configured row_key=%s",
+            row_key,
+        )
+        return {"backend": "none", "scheduled": False}
+
+    name = create_http_task(
+        relative_url="/internal/jobs/process-lead",
+        payload=payload,
+        schedule_time=datetime.now(timezone.utc),
+        task_id=process_lead_task_id(row_key),
+    )
+    return {
+        "backend": "cloud_tasks",
+        "scheduled": bool(name),
+        "task_name": name,
+        "row_key": row_key,
+    }
+
+
 def schedule_followup_email_job(
     *,
     row_key: str,

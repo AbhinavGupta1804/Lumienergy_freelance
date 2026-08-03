@@ -17,6 +17,27 @@ def parse_yes_no_consent(value: str | None) -> bool:
     return (value or "").strip().lower() in {"yes", "y", "true", "1"}
 
 
+def normalize_offer_page(value: str | None) -> str:
+    """
+    Normalize Offer Page / Form Source cells to a slug.
+
+    Handles URLs and paths from the main site (e.g. ``/getquote``,
+    ``https://…/aps-hike``) so eligibility checks stay consistent.
+    """
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    if "://" in raw:
+        from urllib.parse import urlparse
+
+        path = urlparse(raw).path or ""
+        raw = path.strip() or raw
+    raw = raw.strip("/")
+    if "/" in raw:
+        raw = raw.rsplit("/", 1)[-1]
+    return raw.split("?", 1)[0].strip()
+
+
 # Sheet bucket labels → dollar amount used for solar projections / report PDF.
 _MONTHLY_BILL_BUCKETS: dict[str, float] = {
     "under_100": 100.0,
