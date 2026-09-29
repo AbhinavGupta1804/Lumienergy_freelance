@@ -56,6 +56,20 @@ async def send_email_resend(
       {"filename": "report.pdf", "content": "<base64>", "content_type": "application/pdf"}
     """
     settings = get_settings()
+    if not settings.email_enabled or not settings.resend_enabled:
+        reason = "email_disabled" if not settings.email_enabled else "resend_disabled"
+        logger.info(
+            "Email skipped (%s) — to=%s subject=%s",
+            reason,
+            (to_email or "").strip(),
+            (subject or "")[:60],
+        )
+        return EmailSendResult(
+            success=False,
+            to_email=(to_email or "").strip(),
+            error=reason,
+        )
+
     api_key = (settings.resend_api_key or "").strip()
     if not api_key:
         raise ResendEmailError("RESEND_API_KEY is not set")

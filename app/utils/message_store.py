@@ -22,6 +22,9 @@ _MESSAGE_COLUMNS = (
 
 class _MessageBackend(Protocol):
     def log_message(self, **kwargs: Any) -> int | None: ...
+    def has_successful_outbound(
+        self, *, lead_row_key: str, message_type: str
+    ) -> bool: ...
     def list_messages(
         self,
         *,
@@ -71,7 +74,32 @@ class SqliteMessageBackend:
                 ON customer_messages (created_at DESC)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_customer_messages_lead_type
+                ON customer_messages (lead_row_key, message_type, direction, status)
+                """
+            )
             conn.commit()
+
+    def has_successful_outbound(
+        self, *, lead_row_key: str, message_type: str
+    ) -> bool:
+        if not lead_row_key:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM customer_messages
+                WHERE direction = 'outbound'
+                  AND lead_row_key = ?
+                  AND message_type = ?
+                  AND status = 'sent'
+                LIMIT 1
+                """,
+                (lead_row_key, message_type),
+            ).fetchone()
+        return row is not None
 
     def log_message(self, **kwargs: Any) -> int | None:
         now = datetime.now(timezone.utc).isoformat()
@@ -188,6 +216,22 @@ class SupabaseMessageBackend:
             return resp.data[0].get("id")
         return None
 
+    def has_successful_outbound(
+        self, *, lead_row_key: str, message_type: str
+    ) -> bool:
+        if not lead_row_key:
+            return False
+        resp = (
+            self._table.select("id")
+            .eq("direction", "outbound")
+            .eq("lead_row_key", lead_row_key)
+            .eq("message_type", message_type)
+            .eq("status", "sent")
+            .limit(1)
+            .execute()
+        )
+        return bool(resp.data)
+
     def list_messages(
         self,
         *,
@@ -254,6 +298,14 @@ class CustomerMessageStore:
             kwargs.get("message_type"),
         )
         return msg_id
+
+    def has_successful_outbound(
+        self, *, lead_row_key: str, message_type: str
+    ) -> bool:
+        return self._impl.has_successful_outbound(
+            lead_row_key=lead_row_key,
+            message_type=message_type,
+        )
 
     def list_messages(self, **kwargs: Any) -> list[dict]:
         return self._impl.list_messages(**kwargs)

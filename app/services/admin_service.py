@@ -200,39 +200,65 @@ class AdminService:
         *,
         q: str = "",
         limit: int = 200,
+        last_read_by_phone: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """SMS threads grouped by customer phone (sidebar)."""
+        """SMS threads grouped by customer phone (sidebar).
+
+        unread_count:
+        - If last_read_by_phone[phone] is set: inbound messages after that timestamp
+        - Else: consecutive inbound messages since the latest outbound (newest-first trail)
+        """
         messages = self.list_messages(channel="sms", limit=5000)
         by_phone: dict[str, dict[str, Any]] = {}
+        reads = last_read_by_phone or {}
 
+        # messages are newest-first from list_messages
         for msg in messages:
             phone = self.customer_phone_for_message(msg)
             if not phone:
                 continue
-            existing = by_phone.get(phone)
             created = msg.get("created_at") or ""
+            direction = (msg.get("direction") or "").lower()
+            existing = by_phone.get(phone)
+
             if not existing:
                 by_phone[phone] = {
                     "phone": phone,
                     "lead_name": (msg.get("lead_name") or "").strip(),
                     "last_message": (msg.get("body") or "")[:120],
                     "last_message_at": created,
-                    "last_direction": msg.get("direction"),
+                    "last_direction": direction,
+                    "unread_count": 0,
+                    "_trail_unread": True,
                 }
-                continue
-            if created > (existing.get("last_message_at") or ""):
-                existing["last_message"] = (msg.get("body") or "")[:120]
-                existing["last_message_at"] = created
-                existing["last_direction"] = msg.get("direction")
-            name = (msg.get("lead_name") or "").strip()
-            if name and not existing.get("lead_name"):
-                existing["lead_name"] = name
+                existing = by_phone[phone]
+            else:
+                if created > (existing.get("last_message_at") or ""):
+                    existing["last_message"] = (msg.get("body") or "")[:120]
+                    existing["last_message_at"] = created
+                    existing["last_direction"] = direction
+                name = (msg.get("lead_name") or "").strip()
+                if name and not existing.get("lead_name"):
+                    existing["lead_name"] = name
+
+            last_read = (reads.get(phone) or "").strip()
+            if last_read:
+                if direction == "inbound" and created > last_read:
+                    existing["unread_count"] = int(existing.get("unread_count") or 0) + 1
+            elif existing.get("_trail_unread"):
+                if direction == "inbound":
+                    existing["unread_count"] = int(existing.get("unread_count") or 0) + 1
+                else:
+                    existing["_trail_unread"] = False
 
         rows = sorted(
             by_phone.values(),
             key=lambda r: r.get("last_message_at") or "",
             reverse=True,
         )
+        for row in rows:
+            row.pop("_trail_unread", None)
+            row["unread_count"] = int(row.get("unread_count") or 0)
         if q.strip():
             needle = q.strip().lower()
             rows = [

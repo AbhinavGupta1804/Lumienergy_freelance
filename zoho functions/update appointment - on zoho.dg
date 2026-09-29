@@ -1,0 +1,155 @@
+string standalone.update_appointment(Map crmAPIRequest)
+{
+// ==========================================
+// 1. Parse Cal.com webhook
+// ==========================================
+body = crmAPIRequest.get("body").toMap();
+payload = body.get("payload");
+// Only process real bookings
+triggerEvent = body.get("triggerEvent");
+if(triggerEvent != "BOOKING_CREATED")
+{
+	return "IGNORED: " + triggerEvent;
+}
+// ==========================================
+// 2. Get attendee
+// ==========================================
+attendees = payload.get("attendees");
+if(attendees == null || attendees.isEmpty())
+{
+	return "ERROR: No attendee found";
+}
+attendee = attendees.get(0);
+// ==========================================
+// 3. Get customer email
+// ==========================================
+customerEmail = attendee.get("email");
+if(customerEmail == null || customerEmail == "")
+{
+	return "ERROR: No customer email found";
+}
+info "Customer Email: " + customerEmail;
+// ==========================================
+// 4. Get appointment start time from Cal.com
+// ==========================================
+startTime = payload.get("startTime");
+if(startTime == null || startTime == "")
+{
+	return "ERROR: No appointment start time found";
+}
+info "Raw Cal.com Start Time: " + startTime;
+// ==========================================
+// 5. Convert Cal.com UTC → Phoenix
+// ==========================================
+// Remove milliseconds and Z
+utcText = startTime.subString(0,19);
+// Convert ISO format:
+// 2026-08-20T17:00:00
+// into:
+// 20-Aug-2026 17:00:00
+year = utcText.subString(0,4);
+month = utcText.subString(5,7);
+day = utcText.subString(8,10);
+hour = utcText.subString(11,13);
+minute = utcText.subString(14,16);
+second = utcText.subString(17,19);
+monthName = "";
+if(month == "01")
+{
+	monthName = "Jan";
+}
+else if(month == "02")
+{
+	monthName = "Feb";
+}
+else if(month == "03")
+{
+	monthName = "Mar";
+}
+else if(month == "04")
+{
+	monthName = "Apr";
+}
+else if(month == "05")
+{
+	monthName = "May";
+}
+else if(month == "06")
+{
+	monthName = "Jun";
+}
+else if(month == "07")
+{
+	monthName = "Jul";
+}
+else if(month == "08")
+{
+	monthName = "Aug";
+}
+else if(month == "09")
+{
+	monthName = "Sep";
+}
+else if(month == "10")
+{
+	monthName = "Oct";
+}
+else if(month == "11")
+{
+	monthName = "Nov";
+}
+else if(month == "12")
+{
+	monthName = "Dec";
+}
+utcFormatted = day + "-" + monthName + "-" + year + " " + hour + ":" + minute + ":" + second;
+info "UTC formatted: " + utcFormatted;
+// Convert UTC date/time to Unix timestamp
+unixTime = utcFormatted.unixEpoch("UTC");
+info "Unix Time: " + unixTime;
+// Convert Unix timestamp to Phoenix time
+phoenixTime = toDateTimeString(unixTime,"yyyy-MM-dd HH:mm:ss","America/Phoenix");
+info "Phoenix Time: " + phoenixTime;
+// ==========================================
+// 6. Create ISO-8601 value for Zoho CRM
+// ==========================================
+appointmentDateTime = phoenixTime.toDateTime("yyyy-MM-dd HH:mm:ss").toString("yyyy-MM-dd'T'HH:mm:ss-07:00");
+info "Final Zoho DateTime: " + appointmentDateTime;
+// ==========================================
+// 7. Find Lead by email
+// ==========================================
+leads = zoho.crm.searchRecords("Leads","(Email:equals:" + customerEmail + ")");
+info "Matching Leads: " + leads;
+// ==========================================
+// 8. Make sure a Lead was found
+// ==========================================
+if(leads == null || leads.isEmpty())
+{
+	return "ERROR: No Lead found for email: " + customerEmail;
+}
+// ==========================================
+// 9. Get Lead ID
+// ==========================================
+lead = leads.get(0);
+leadId = lead.get("id");
+info "Lead ID: " + leadId;
+// ==========================================
+// 10. Prepare Lead update
+// ==========================================
+updateData = Map();
+// Store appointment date/time
+updateData.put("Appointment_Booked",appointmentDateTime);
+// Move Lead to Appointment Booked bucket
+updateData.put("Lead_Status","Appointment Booked");
+updateData.put("Follow_up_emails_active",false);
+// ==========================================
+// ==========================================
+// 11. Update Lead (trigger workflows!)
+// ==========================================
+updateResponse = zoho.crm.updateRecord("Leads",leadId,updateData,{"trigger":{"workflow","blueprint","approval"}});
+info "Zoho Update Response: " + updateResponse;
+// ==========================================
+// 12. Return result
+// ==========================================
+return "SUCCESS: Lead updated successfully";
+}

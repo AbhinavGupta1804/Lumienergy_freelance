@@ -27,6 +27,7 @@ class Lead:
     transactional_sms_consent: bool = False
     offer_page: str = ""
     monthly_bill: float = 0.0
+    zoho_lead_id: str = ""
 
     @property
     def full_name(self) -> str:

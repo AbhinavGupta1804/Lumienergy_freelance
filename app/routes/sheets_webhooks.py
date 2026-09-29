@@ -19,8 +19,10 @@ from app.integrations.sheet_columns import (
     parse_yes_no_consent,
 )
 from app.models.lead import Lead
+from app.services.instant_lead_sms import InstantLeadSmsService
 from app.services.job_scheduler import schedule_process_lead_job
 from app.services.lead_processor import LeadProcessor
+from app.utils.phone import normalize_e164
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,9 @@ class NewLeadBody(BaseModel):
     transactional_sms_consent: str = ""
     offer_page: str = ""
     monthly_bill: str = ""
+    zoho_lead_id: str = ""
+    # Personalized website upload link (written by LUMI SOLAR WEBSITE on form submit)
+    bill_upload_url: str = ""
 
     def to_lead(self) -> Lead:
         from datetime import datetime, timezone
@@ -67,6 +72,7 @@ class NewLeadBody(BaseModel):
             ),
             offer_page=offer_page,
             monthly_bill=monthly_bill,
+            zoho_lead_id=(self.zoho_lead_id or "").strip(),
         )
 
 
@@ -105,6 +111,41 @@ async def sheets_new_lead(
     _check_webhook_secret(x_sheets_webhook_secret)
 
     lead = body.to_lead()
+    store = request.app.state.dedup_store
+
+    # Persist Transactional SMS Consent → sms_eligible before any SMS/dial.
+    phone_e164 = normalize_e164(lead.phone_no) or lead.phone_no.strip()
+    store.upsert_lead_from_sheet(
+        row_key=lead.row_key,
+        row_number=lead.row_number,
+        name=lead.full_name,
+        address=lead.address,
+        phone=phone_e164,
+        email=lead.email,
+        sms_eligible=lead.transactional_sms_consent,
+        offer_page=lead.offer_page,
+        monthly_bill=lead.monthly_bill,
+    )
+    logger.info(
+        "Stored sheet consent row=%s row_key=%s sms_eligible=%s (raw=%r)",
+        lead.row_number,
+        lead.row_key,
+        lead.transactional_sms_consent,
+        body.transactional_sms_consent,
+    )
+
+    if lead.zoho_lead_id:
+        # One zoho_lead_id may appear on only one processed_leads row (unique index).
+        # Keep it on the sheet row; bill attach resolves Zoho via phone/email fallback.
+        store.bind_zoho_lead_id(
+            row_key=lead.row_key,
+            row_number=lead.row_number,
+            name=lead.full_name,
+            address=lead.address,
+            phone=lead.phone_no,
+            email=lead.email,
+            zoho_lead_id=lead.zoho_lead_id,
+        )
     if not lead.first_name and not lead.last_name and not lead.address and not lead.phone_no:
         raise HTTPException(status_code=400, detail="Row is empty")
 
@@ -114,13 +155,31 @@ async def sheets_new_lead(
             lead.row_number,
         )
 
+    # Stage 0 runs even if the dial job was already processed for this row_key.
+    # (Previously we returned early on already_processed with no logs — looked like
+    # Stage 0 "never triggered".)
+    instant_sms: InstantLeadSmsService = request.app.state.instant_lead_sms_service
+    welcome_result = await instant_sms.on_new_lead(lead)
+    logger.info(
+        "Welcome SMS row %s: %s",
+        lead.row_number,
+        welcome_result,
+    )
+
     dedup = request.app.state.dedup_store
     if dedup.is_processed(lead.row_key):
+        logger.info(
+            "Sheets webhook row %s already_processed row_key=%s — skip dial, welcome_sms=%s",
+            lead.row_number,
+            lead.row_key,
+            welcome_result,
+        )
         return {
             "accepted": True,
             "skipped": True,
             "reason": "already_processed",
             "row_key": lead.row_key,
+            "welcome_sms": welcome_result,
         }
 
     job_payload = {
@@ -134,6 +193,7 @@ async def sheets_new_lead(
         "offer_page": lead.offer_page,
         "monthly_bill": body.monthly_bill,
         "row_key": lead.row_key,
+        "zoho_lead_id": lead.zoho_lead_id,
     }
     job = schedule_process_lead_job(job_payload)
 
@@ -154,6 +214,7 @@ async def sheets_new_lead(
             "via": "cloud_tasks",
             "row_number": lead.row_number,
             "row_key": lead.row_key,
+            "welcome_sms": welcome_result,
         }
 
     # Local / CT not configured: keep the HTTP request alive for dial + report.
@@ -165,4 +226,5 @@ async def sheets_new_lead(
         "via": "inline",
         "row_number": lead.row_number,
         "row_key": lead.row_key,
+        "welcome_sms": welcome_result,
     }

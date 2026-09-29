@@ -144,5 +144,17 @@ async def twilio_inbound_sms(request: Request) -> PlainTextResponse:
         except Exception:
             logger.exception("Failed to log inbound SMS sid=%s", message_sid)
 
+    nurture = getattr(request.app.state, "sms_nurture_service", None)
+    if nurture and from_addr:
+        try:
+            nurture_result = nurture.on_inbound_sms(from_phone=from_addr, body=body)
+            logger.info(
+                "Inbound SMS nurture handling from=%s result=%s",
+                from_addr,
+                nurture_result,
+            )
+        except Exception:
+            logger.exception("Failed nurture handling for inbound SMS from=%s", from_addr)
+
     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
     return PlainTextResponse(twiml, media_type="application/xml")

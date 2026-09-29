@@ -91,7 +91,15 @@ async def send_email(
         return EmailSendResult(success=False, to_email=to_email, error="invalid_email")
 
     settings = get_settings()
-    if (settings.resend_api_key or "").strip():
+    if not settings.email_enabled:
+        logger.info(
+            "Email disabled — skip to=%s subject=%s",
+            to_email,
+            (subject or "")[:60],
+        )
+        return EmailSendResult(success=False, to_email=to_email, error="email_disabled")
+
+    if settings.resend_enabled and (settings.resend_api_key or "").strip():
         from app.integrations.resend_email import ResendEmailError, send_email_resend
 
         try:

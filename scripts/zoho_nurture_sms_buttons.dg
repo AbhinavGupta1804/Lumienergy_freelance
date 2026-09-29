@@ -1,0 +1,57 @@
+/*
+  Zoho custom function — Stage 2 SMS follow-up activation.
+
+  Wire this as a Lead button / function:
+    string button.start_stage2_followup(String leadId)
+
+  Replace BASE_URL + SECRET with your live values (see FastAPI .env):
+    PUBLIC_BASE_URL / ZOHO_WEBHOOK_SECRET
+*/
+
+string button.start_stage2_followup(String leadId)
+{
+	lead = zoho.crm.getRecordById("Leads", leadId);
+	if(lead.get("Follow_up_emails_active") == true)
+	{
+		return "Follow-up emails are already running for this lead.";
+	}
+
+	// Mark active in Zoho first so a second click is blocked even if SMS fails
+	updateMap = Map();
+	updateMap.put("Follow_up_emails_active", true);
+	zoho.crm.updateRecord("Leads", leadId, updateMap);
+
+	// Call FastAPI → schedule Stage 2 nurture SMS (Twilio + Cloud Tasks)
+	BASE_URL = "https://maya-unanemic-honey.ngrok-free.dev";
+	SECRET = "MigkY4az41qY_RpU2DURPdbQkvgh4CEv";
+
+	payload = Map();
+	payload.put("id", leadId);
+	payload.put("phone", ifnull(lead.get("Phone"), ""));
+	payload.put("email", ifnull(lead.get("Email"), ""));
+	payload.put("first_name", ifnull(lead.get("First_Name"), ""));
+	payload.put("last_name", ifnull(lead.get("Last_Name"), ""));
+	// Custom address API name in this org (four s's)
+	payload.put("address", ifnull(lead.get("Addressss"), ""));
+
+	headers = Map();
+	headers.put("Content-Type", "application/json");
+	headers.put("X-Zoho-Webhook-Secret", SECRET);
+
+	resp = invokeurl
+	[
+		url : BASE_URL + "/webhooks/zoho/activate-followup"
+		type : POST
+		parameters : payload.toString()
+		headers : headers
+		detailed : true
+	];
+	info resp;
+
+	code = ifnull(resp.get("responseCode"), 0);
+	if(code == 200)
+	{
+		return "Stage 2 follow-up started for this lead.";
+	}
+	return "Zoho flag set, but SMS activate failed (HTTP " + code + "). Check FastAPI logs.";
+}

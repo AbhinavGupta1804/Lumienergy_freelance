@@ -1,0 +1,277 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Schedule Callback</title>
+<!-- Official Zoho Embedded App SDK (crm/v8 ZohoCRMWidgetSDK URL 404s) -->
+<script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
+<style>
+body{font-family:Arial,sans-serif;margin:0;padding:22px;color:#172033;background:#fff}
+h2{margin:0 0 18px;font-size:20px}
+label{display:block;font-size:13px;font-weight:600;margin:13px 0 6px}
+input,textarea{width:100%;padding:10px;border:1px solid #d7dce5;border-radius:8px;font-size:14px;box-sizing:border-box}
+input[readonly]{background:#f6f7f9}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+button{width:100%;margin-top:18px;padding:11px;border:0;border-radius:8px;background:#4f46e5;color:white;font-weight:700;cursor:pointer}
+button:disabled{opacity:.6}
+#status{margin-top:12px;font-size:13px}.ok{color:#087443}.err{color:#b42318}
+.hint{font-size:12px;color:#667085;margin-top:5px}
+</style>
+</head>
+<body>
+<h2>Schedule Callback</h2>
+
+<label>Customer name</label>
+<input id="name" readonly>
+
+<label>Phone number</label>
+<input id="phone" readonly>
+
+<div class="row">
+  <div><label>Date</label><input id="date" type="date"></div>
+  <div><label>Time (Arizona)</label><input id="time" type="time"></div>
+</div>
+
+<label>Duration (minutes)</label>
+<input id="duration" type="number" min="1" max="240" value="5">
+<div class="hint">The Google Calendar event will be FREE/non-blocking.</div>
+
+<label>Notes</label>
+<textarea id="notes" placeholder="What should the salesperson remember?"></textarea>
+
+<button id="submit" type="button">Schedule Callback</button>
+<div id="status"></div>
+
+<script>
+const FUNCTION_NAME = "create_google_callback";
+const ARIZONA_TIMEZONE = "America/Phoenix";
+
+let leadId = null;
+
+function status(msg, error) {
+  const e = document.getElementById("status");
+  e.textContent = msg;
+  e.className = error ? "err" : "ok";
+}
+
+function getArizonaDateTime() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ARIZONA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(new Date());
+
+  const p = {};
+  parts.forEach(function (x) {
+    if (x.type !== "literal") p[x.type] = x.value;
+  });
+
+  return {
+    date: p.year + "-" + p.month + "-" + p.day,
+    time: p.hour + ":" + p.minute
+  };
+}
+
+function getFunctionOutput(resp) {
+  if (!resp) return "";
+  if (resp.details && resp.details.output !== undefined) {
+    return String(resp.details.output);
+  }
+  if (resp.output !== undefined) {
+    return String(resp.output);
+  }
+  return "";
+}
+
+function fillLeadForm(lead) {
+  lead = lead || {};
+  document.getElementById("name").value =
+    lead.Full_Name ||
+    [lead.First_Name, lead.Last_Name].filter(Boolean).join(" ") ||
+    "";
+  document.getElementById("phone").value = lead.Phone || lead.Mobile || "";
+
+  const az = getArizonaDateTime();
+  document.getElementById("date").value = az.date;
+  document.getElementById("time").value = az.time;
+}
+
+async function loadLead(id) {
+  leadId = Array.isArray(id) ? id[0] : id;
+  if (!leadId) {
+    throw new Error("Zoho did not provide the current Lead ID.");
+  }
+
+  const r = await ZOHO.CRM.API.getRecord({
+    Entity: "Leads",
+    RecordID: leadId
+  });
+
+  const lead = r.data && r.data[0] ? r.data[0] : {};
+  fillLeadForm(lead);
+}
+
+function init() {
+  try {
+    if (typeof ZOHO === "undefined" || !ZOHO.embeddedApp) {
+      status(
+        "Zoho Widget SDK failed to load. Check network / CSP and reopen.",
+        true
+      );
+      return;
+    }
+
+    ZOHO.embeddedApp.on("PageLoad", function (data) {
+      loadLead(data && data.EntityId)
+        .catch(function (e) {
+          console.error("PageLoad error:", e);
+          status("Could not load the Lead. Please close and reopen the widget.", true);
+        });
+    });
+
+    ZOHO.embeddedApp.init();
+  } catch (e) {
+    console.error("Widget initialization error:", e);
+    status("Could not initialize the widget.", true);
+  }
+}
+
+document.getElementById("submit").onclick = async function () {
+  const btn = document.getElementById("submit");
+
+  const leadName = document.getElementById("name").value.trim();
+  const phone = document.getElementById("phone").value.trim();
+  const date = document.getElementById("date").value;
+  const time = document.getElementById("time").value;
+  const duration = Number(document.getElementById("duration").value);
+  const notes = document.getElementById("notes").value.trim();
+
+  if (!leadId) {
+    status("Lead information is not loaded yet. Please wait a moment.", true);
+    return;
+  }
+
+  if (!date || !time || !duration) {
+    status("Enter date, time and duration.", true);
+    return;
+  }
+
+  if (duration < 1 || duration > 240) {
+    status("Duration must be between 1 and 240 minutes.", true);
+    return;
+  }
+
+  btn.disabled = true;
+  status("Scheduling...");
+
+  try {
+    const args = {
+      lead_id: String(leadId),
+      lead_name: leadName,
+      phone: phone,
+      date: date,
+      time: time,
+      duration_minutes: String(duration),
+      notes: notes
+    };
+
+    const req_data = {
+      arguments: JSON.stringify(args)
+    };
+
+    console.log("Calling Zoho function:", FUNCTION_NAME, args);
+
+    let resp;
+    try {
+      resp = await ZOHO.CRM.FUNCTIONS.execute(FUNCTION_NAME, req_data);
+    } catch (apiErr) {
+      console.error("FUNCTIONS.execute threw:", apiErr);
+      throw new Error(
+        "Function call failed (often wrong API name or missing permission): " +
+          (apiErr && apiErr.message ? apiErr.message : JSON.stringify(apiErr))
+      );
+    }
+
+    console.log("Google callback function response:", resp);
+
+    // Zoho sometimes returns code/message without running Deluge
+    if (resp && (resp.code || resp.status) && !getFunctionOutput(resp)) {
+      const code = resp.code || resp.status;
+      const msg =
+        (resp.message || (resp.details && resp.details.message) || "") + "";
+      throw new Error(
+        "Zoho refused function '" +
+          FUNCTION_NAME +
+          "' [" +
+          code +
+          "] " +
+          msg +
+          " — check API name under Setup → Functions (empty logs = never ran)."
+      );
+    }
+
+    const output = getFunctionOutput(resp);
+    if (!output) {
+      throw new Error(
+        "No output from '" +
+          FUNCTION_NAME +
+          "'. Full response: " +
+          JSON.stringify(resp) +
+          " — empty function logs usually means the function name is wrong or not callable from widgets."
+      );
+    }
+
+    if (output.indexOf("ERROR:") === 0) {
+      throw new Error(output);
+    }
+
+    let result = null;
+    try {
+      result = JSON.parse(output);
+    } catch (parseError) {
+      result = null;
+    }
+
+    if (result && result.status && result.status !== "success") {
+      throw new Error(
+        result.message || result.error || JSON.stringify(result)
+      );
+    }
+
+    status("Callback scheduled successfully.");
+
+    setTimeout(function () {
+      try {
+        ZOHO.CRM.UI.Popup.close();
+      } catch (closeError) {
+        console.log("Popup close:", closeError);
+      }
+    }, 900);
+  } catch (e) {
+    console.error("Schedule callback error:", e);
+
+    const message = e && e.message ? e.message : String(e);
+
+    if (
+      message.indexOf("Google Calendar") !== -1 ||
+      message.indexOf("google_calendar_callback") !== -1
+    ) {
+      status("Google Calendar connection failed. Check the Zoho connection.", true);
+    } else {
+      // Show the real reason in the widget (browser console has full detail)
+      status(message.slice(0, 280), true);
+    }
+
+    btn.disabled = false;
+  }
+};
+
+init();
+</script>
+</body>
+</html>

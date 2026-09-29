@@ -1,0 +1,68 @@
+Hey Abhi — here's the full build-out for the Lumi Energy lead automation (Meta Ads → text/email).
+ Content doc is attached (PDF), this message covers the logic/flow so you can wire it up.
+
+OVERVIEW OF FLOW
+Lead fills out Meta lead form → triggers automation → rep calls lead → branches into either 
+"Appointment Booked" or "No Answer" sequence.
+
+---
+STAGE 0 — Instant Confirmation (trigger: form submission)
+Send immediately:
+Text: "Thanks for requesting info on solar with Lumi Energy! Someone from our team will be 
+reaching out shortly to answer your questions. Talk soon!"
+
+This should fire the moment the lead hits our CRM/database, no delay.
+
+---
+STAGE 1 — Appointment Booked (trigger: rep manually marks lead as "Appointment Set" in CRM, 
+ideally with appt date/time field populated)
+Send immediately when that status changes:
+1. Email — subject + full body in the attached doc under "Stage 1 — Appointment Booked." 
+Needs these dynamic fields merged in:
+ - [First Name]
+ - [Founder Video Link] — static, same for everyone
+ - [Google Reviews Link] — static
+ - [Website Link] — static
+ - [Calendar Link] — this needs to be a link that pre-fills a Google Calendar "add event" with 
+ the correct date/time/rep name pulled from the appointment record (not a static link 
+ — needs to be dynamically generated per lead)
+ - [Bill Upload Link] — link to our bill upload form/portal, ideally pre-tagged 
+ with lead ID so the uploaded bill auto-attaches to their CRM record
+2. Text — sent right after the email, same trigger. Copy is in the doc.
+
+---
+STAGE 2 — No Answer Re-engagement (trigger: rep marks lead as "No Answer" / call attempted, 
+lead did not book)
+10-touch sequence, alternating email + text, same day pairing. Cadence:
+Touch 1 – few hours after missed call
+Touch 2 – Day 1
+Touch 3 – Day 2
+Touch 4 – Day 4
+Touch 5 – Day 6
+Touch 6 – Day 8
+Touch 7 – Day 11
+Touch 8 – Day 14
+Touch 9 – Day 18
+Touch 10 – Day 22
+
+All 10 touches (subject lines + email body + text copy) are in the attached doc under "Stage 2."
+
+Sequence should auto-stop immediately if:
+- Lead responds to any text/email
+- Lead books an appointment (pulls them into Stage 1 instead)
+- Lead replies STOP/unsubscribe
+
+---
+TECHNICAL / COMPLIANCE NOTES (important, please build these in — not just nice-to-haves):
+1. Every text after the first one needs an opt-out footer: "Reply STOP to unsubscribe."
+ Please build STOP handling so it actually suppresses future sends for that lead.
+2. Every email needs our physical business address and an unsubscribe link in the footer 
+for CAN-SPAM compliance.
+3. Merge tags needed across all templates: [First Name], [Rep Name], [Rep Phone], [Company Phone].
+4. Please double check timing doesn't send texts outside allowed hours (aiming for 9am–8pm recipient 
+local time, whatever's compliant for our state).
+5. Any lead that books an appointment mid-sequence should be pulled out of the No Answer
+ sequence automatically and dropped into Stage 1.
+
+Let me know what CRM/platform fields you need from me to map the merge tags and trigger statuses, 
+and if you want me to write shorter SMS-only variants for any of the 10 touches to fit character limits.

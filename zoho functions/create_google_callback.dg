@@ -1,0 +1,120 @@
+string standalone.create_google_callback(Map crmAPIRequest)
+{
+	returnValue = "";
+	params = crmAPIRequest.get("params");
+	rawArgs = null;
+	if(params != null)
+	{
+		rawArgs = params.get("arguments");
+	}
+	args = Map();
+	if(rawArgs != null)
+	{
+		args = rawArgs.toMap();
+	}
+	leadId = args.get("lead_id");
+	leadName = args.get("lead_name");
+	phone = args.get("phone");
+	callbackDate = args.get("date");
+	callbackTime = args.get("time");
+	duration = args.get("duration_minutes");
+	notes = args.get("notes");
+	info "create_google_callback args=" + args;
+	if(callbackDate == null || callbackDate == "")
+	{
+		returnValue = "ERROR: Callback date is required.";
+	}
+	else if(callbackTime == null || callbackTime == "")
+	{
+		returnValue = "ERROR: Callback time is required.";
+	}
+	else if(duration == null || duration == "")
+	{
+		returnValue = "ERROR: Callback duration is required.";
+	}
+	else
+	{
+		mins = duration.toLong();
+		if(mins < 1 || mins > 240)
+		{
+			returnValue = "ERROR: Duration must be between 1 and 240 minutes.";
+		}
+		else
+		{
+			timePart = callbackTime.toString().trim();
+			if(timePart.length() == 5)
+			{
+				timePart = timePart + ":00";
+			}
+			nameSafe = ifnull(leadName,"Lead");
+			phoneSafe = ifnull(phone,"");
+			notesSafe = ifnull(notes,"");
+			leadSafe = ifnull(leadId,"");
+			startDateTimeText = callbackDate.toString().trim() + " " + timePart;
+			startDateTime = toTime(startDateTimeText,"yyyy-MM-dd HH:mm:ss","America/Phoenix");
+			endDateTime = startDateTime.addMinutes(mins);
+			startString = startDateTime.toString("yyyy-MM-dd'T'HH:mm:ss","America/Phoenix");
+			endString = endDateTime.toString("yyyy-MM-dd'T'HH:mm:ss","America/Phoenix");
+			summary = "Callback - " + nameSafe;
+			description = "Lumi Energy Callback\n\nLead: " + nameSafe + "\n";
+			if(phoneSafe != "")
+			{
+				description = description + "Phone: " + phoneSafe + "\n";
+			}
+			if(notesSafe != "")
+			{
+				description = description + "\nNotes:\n" + notesSafe;
+			}
+			if(leadSafe != "")
+			{
+				description = description + "\n\nZoho Lead ID: " + leadSafe;
+			}
+			startMap = Map();
+			startMap.put("dateTime",startString);
+			startMap.put("timeZone","America/Phoenix");
+			endMap = Map();
+			endMap.put("dateTime",endString);
+			endMap.put("timeZone","America/Phoenix");
+			reminderOverride = Map();
+			reminderOverride.put("method","popup");
+			reminderOverride.put("minutes",10);
+			reminderList = List();
+			reminderList.add(reminderOverride);
+			remindersMap = Map();
+			remindersMap.put("useDefault",false);
+			remindersMap.put("overrides",reminderList);
+			eventMap = Map();
+			eventMap.put("summary",summary);
+			eventMap.put("description",description);
+			eventMap.put("start",startMap);
+			eventMap.put("end",endMap);
+			eventMap.put("transparency","transparent");
+			eventMap.put("eventType","default");
+			eventMap.put("reminders",remindersMap);
+			info "create_google_callback start=" + startString + " end=" + endString;
+			response = invokeurl
+			[
+				url :"https://www.googleapis.com/calendar/v3/calendars/primary/events"
+				type :POST
+				body:eventMap.toString()
+				headers:{"Content-Type":"application/json"}
+				connection:"google_calendar_callback1"
+			];
+			info response;
+			if(response != null && response.containKey("id"))
+			{
+				result = Map();
+				result.put("status","success");
+				result.put("message","Callback scheduled successfully.");
+				result.put("event_id",response.get("id"));
+				result.put("calendar_link",response.get("htmlLink"));
+				returnValue = result.toString();
+			}
+			else
+			{
+				returnValue = "ERROR: Google Calendar event could not be created.\n\n" + response;
+			}
+		}
+	}
+	return returnValue;
+}

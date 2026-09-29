@@ -6,7 +6,7 @@ pydantic>=2.9.0
 pydantic-settings>=2.6.0
 python-dotenv>=1.0.1
 
-# HTTP client (ElevenLabs API)
+# HTTP client (Twilio SMS, Cal.com, Discord, ElevenLabs when re-enabled)
 httpx>=0.27.0
 
 # Google Sheets API + Cloud Tasks
@@ -15,13 +15,15 @@ google-auth>=2.35.0
 google-cloud-tasks>=2.16.0
 
 # Natural-language date parsing ("tomorrow", "Tuesday evening", "next Friday")
+# Used by Cal.com scheduling tools (still registered; needed when voice agent is on)
 python-dateutil>=2.9.0
 dateparser>=1.2.0
 
 # Supabase Postgres (when DATABASE_BACKEND=supabase)
 supabase>=2.10.0
 
-# Preliminary solar report PDF
-jinja2>=3.1.0
-matplotlib>=3.8.0
-playwright>=1.40.0
+# --- Disabled while EMAIL_ENABLED=false / RESEND_ENABLED=false ---
+# Preliminary solar report PDF (report emails + follow-ups). Uncomment to re-enable.
+# jinja2>=3.1.0
+# matplotlib>=3.8.0
+# playwright>=1.40.0

@@ -32,7 +32,12 @@ class NotificationResult:
 
 
 def notification_channel() -> str:
-    return (get_settings().notification_channel or "sms").strip().lower()
+    settings = get_settings()
+    channel = (settings.notification_channel or "sms").strip().lower()
+    # Never route bill/confirm to email when EMAIL_ENABLED=false
+    if channel == "email" and not settings.email_enabled:
+        return "sms"
+    return channel
 
 
 def _greeting_name(first_name: str, full_name: str) -> str:

@@ -13,8 +13,23 @@ def _normalize_header(header: str) -> str:
 
 
 def parse_yes_no_consent(value: str | None) -> bool:
-    """True when sheet consent column is Yes (case-insensitive)."""
-    return (value or "").strip().lower() in {"yes", "y", "true", "1"}
+    """True when sheet consent column is Yes (case-insensitive).
+
+    Only explicit yes-like values grant consent; blank / No / anything else → False.
+    """
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return False
+    # Whole-cell Yes (Google Forms often writes "Yes" / "No")
+    if normalized in {"yes", "y", "true", "1"}:
+        return True
+    # Reject explicit no
+    if normalized in {"no", "n", "false", "0"}:
+        return False
+    # Some forms append text after Yes
+    if normalized.startswith("yes"):
+        return True
+    return False
 
 
 def normalize_offer_page(value: str | None) -> str:

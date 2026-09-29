@@ -30,6 +30,10 @@ def callback_task_id(row_key: str, attempt: int) -> str:
     return f"cb-{row_key}-a{attempt}"
 
 
+def nurture_sms_task_id(row_key: str, attempt: int) -> str:
+    return f"ns-{row_key}-a{attempt}"
+
+
 def process_lead_task_id(row_key: str) -> str:
     return f"pl-{row_key}"
 
@@ -129,6 +133,36 @@ def schedule_callback_dial_job(
     }
 
 
+def schedule_nurture_sms_job(
+    *,
+    row_key: str,
+    attempt: int,
+    schedule_at: datetime | str,
+) -> dict[str, Any]:
+    """
+    Schedule Stage 2 nurture SMS touch ``attempt`` (1-based).
+    """
+    if not use_cloud_tasks():
+        logger.warning(
+            "Nurture SMS not enqueued — Cloud Tasks not configured row_key=%s",
+            row_key,
+        )
+        return {"backend": "none", "scheduled": False}
+
+    name = create_http_task(
+        relative_url="/internal/jobs/nurture-sms",
+        payload={"row_key": row_key, "expected_attempt": attempt},
+        schedule_time=schedule_at,
+        task_id=nurture_sms_task_id(row_key, attempt),
+    )
+    return {
+        "backend": "cloud_tasks",
+        "scheduled": bool(name),
+        "task_name": name,
+        "attempt": attempt,
+    }
+
+
 def cancel_pending_followup_jobs(
     row_key: str,
     *,
@@ -177,18 +211,47 @@ def cancel_pending_callback_jobs(
     )
 
 
+def cancel_pending_nurture_jobs(
+    row_key: str,
+    *,
+    known_attempt: int | None = None,
+) -> int:
+    """
+    Soft-cancel nurture SMS jobs.
+
+    Cloud Run's SA currently lacks ``cloudtasks.tasks.delete``, so we do not
+    call the Tasks API here. Instead callers mark ``nurture_sms_status`` away
+    from ``active`` (booked / replied / opted_out); when the scheduled task
+    fires, ``send_scheduled_touch`` no-ops.
+
+    Returns 0 always. Re-enable API deletes later by restoring delete_task_by_id
+    once IAM includes Cloud Tasks Enqueuer (delete) for the runtime SA.
+    """
+    _ = known_attempt
+    if (row_key or "").strip():
+        logger.info(
+            "Nurture Cloud Task delete skipped (status-based cancel) row_key=%s",
+            row_key,
+        )
+    return 0
+
+
 def cancel_jobs_for_lead(row: dict[str, Any]) -> dict[str, int]:
-    """Cancel callback + follow-up Cloud Tasks using attempt counters on the row."""
+    """Cancel callback + follow-up + nurture Cloud Tasks using attempt counters."""
     row_key = (row.get("row_key") or "").strip()
     if not row_key:
-        return {"callbacks": 0, "followups": 0}
+        return {"callbacks": 0, "followups": 0, "nurture": 0}
     cb_attempt = int(row.get("callback_attempt") or 0)
     fu_attempt = int(row.get("followup_email_attempt") or 0)
+    ns_attempt = int(row.get("nurture_sms_attempt") or 0)
     return {
         "callbacks": cancel_pending_callback_jobs(
             row_key, known_attempt=cb_attempt or None
         ),
         "followups": cancel_pending_followup_jobs(
             row_key, known_attempt=fu_attempt
+        ),
+        "nurture": cancel_pending_nurture_jobs(
+            row_key, known_attempt=ns_attempt
         ),
     }

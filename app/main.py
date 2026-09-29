@@ -33,13 +33,15 @@ from app.routes import (
     scheduling,
     sheets_webhooks,
     webhooks,
+    zoho_webhooks,
 )
-from app.services.bill_upload_confirmation_sms import BillUploadConfirmationSmsService
 from app.services.call_orchestrator import CallOrchestrator
 from app.services.callback_service import CallbackService
+from app.services.instant_lead_sms import InstantLeadSmsService
 from app.services.lead_processor import LeadProcessor
 from app.services.post_call_report import PostCallReportService
 from app.services.post_call_sms import PostCallSmsService
+from app.services.sms_nurture import SmsNurtureService
 from app.utils.dedup_store import DedupStore
 from app.utils.logging import setup_logging
 from app.utils.message_store import CustomerMessageStore
@@ -59,9 +61,8 @@ async def lifespan(app: FastAPI):
     call_orchestrator = CallOrchestrator(dedup_store, report_service=post_call_report)
     lead_processor = LeadProcessor(dedup_store, orchestrator=call_orchestrator)
     post_call_sms = PostCallSmsService(dedup_store, message_store)
-    bill_upload_confirmation_sms = BillUploadConfirmationSmsService(
-        dedup_store, message_store
-    )
+    instant_lead_sms = InstantLeadSmsService(dedup_store, message_store)
+    sms_nurture = SmsNurtureService(dedup_store, message_store)
     callback_service = CallbackService(dedup_store, report_service=post_call_report)
 
     app.state.dedup_store = dedup_store
@@ -69,14 +70,15 @@ async def lifespan(app: FastAPI):
     app.state.lead_processor = lead_processor
     app.state.call_orchestrator = call_orchestrator
     app.state.post_call_sms_service = post_call_sms
-    app.state.bill_upload_confirmation_sms_service = bill_upload_confirmation_sms
+    app.state.instant_lead_sms_service = instant_lead_sms
+    app.state.sms_nurture_service = sms_nurture
     app.state.callback_service = callback_service
     app.state.post_call_report_service = post_call_report
 
     from app.integrations.cloud_tasks import use_cloud_tasks
 
     logger.info(
-        "Job backend=%s (callbacks + follow-up emails)",
+        "Job backend=%s (callbacks + follow-up emails + nurture SMS)",
         "cloud_tasks" if use_cloud_tasks() else "none — set GCP Cloud Tasks env to enable",
     )
 
@@ -113,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(elevenlabs_webhooks.router)
     app.include_router(bill_upload_webhooks.router)
     app.include_router(calcom_webhooks.router)
+    app.include_router(zoho_webhooks.router)
     app.include_router(admin.router)
     app.include_router(internal_jobs.router)
 

@@ -47,6 +47,12 @@ class ProcessLeadBody(BaseModel):
     offer_page: str = ""
     monthly_bill: str = ""
     row_key: str = ""
+    zoho_lead_id: str = ""
+
+
+class NurtureSmsBody(BaseModel):
+    row_key: str = Field(..., min_length=1)
+    expected_attempt: int = Field(..., ge=1, le=10)
 
 
 def _verify_secret(header_value: str | None) -> None:
@@ -79,6 +85,7 @@ async def run_process_lead(
         transactional_sms_consent=body.transactional_sms_consent,
         offer_page=body.offer_page,
         monthly_bill=body.monthly_bill,
+        zoho_lead_id=body.zoho_lead_id,
     )
     lead = lead_body.to_lead()
     processor = request.app.state.lead_processor
@@ -227,3 +234,32 @@ async def run_callback_dial(
     )
     outcome = await orchestrator.retry_call_for_row(row)
     return JSONResponse({"ok": True, "action": "dialed", **outcome})
+
+
+@router.post("/nurture-sms")
+async def run_nurture_sms(
+    body: NurtureSmsBody,
+    request: Request,
+    x_internal_jobs_secret: str | None = Header(default=None),
+) -> JSONResponse:
+    """Send one Stage 2 nurture SMS touch and enqueue the next."""
+    _verify_secret(x_internal_jobs_secret)
+
+    nurture = getattr(request.app.state, "sms_nurture_service", None)
+    if nurture is None:
+        return JSONResponse(
+            {"ok": False, "error": "sms_nurture_service_missing"},
+            status_code=503,
+        )
+
+    result = await nurture.send_scheduled_touch(
+        row_key=body.row_key,
+        expected_attempt=body.expected_attempt,
+    )
+    logger.info(
+        "Cloud Tasks nurture-sms row_key=%s attempt=%s result=%s",
+        body.row_key,
+        body.expected_attempt,
+        result,
+    )
+    return JSONResponse({"ok": True, **result})

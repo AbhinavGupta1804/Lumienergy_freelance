@@ -10,6 +10,7 @@ type Props = {
   loading: boolean;
   sending: boolean;
   onSend: (text: string) => Promise<void>;
+  onBack?: () => void;
 };
 
 function fmtBubbleTime(iso?: string) {
@@ -27,6 +28,7 @@ export function MessageThread({
   loading,
   sending,
   onSend,
+  onBack,
 }: Props) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -43,18 +45,40 @@ export function MessageThread({
   };
 
   return (
-    <>
-      <div className="flex items-center gap-3 border-b border-lumi-border bg-white px-4 py-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-lumi-blue text-sm font-bold text-white">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-2 border-b border-lumi-border bg-white px-2 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to conversations"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg md:hidden"
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+        ) : null}
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-lumi-blue text-sm font-bold text-white">
           {(leadName || phone).charAt(0).toUpperCase()}
         </div>
-        <div>
-          <div className="font-semibold">{leadName || "Unknown"}</div>
-          <div className="text-xs text-lumi-muted">{phone}</div>
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{leadName || "Unknown"}</div>
+          <div className="truncate text-xs text-lumi-muted">{phone}</div>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-4">
         {loading ? (
           <p className="text-center text-sm text-lumi-muted">Loading messages…</p>
         ) : messages.length === 0 ? (
@@ -70,7 +94,7 @@ export function MessageThread({
                 className={`mb-2 flex ${outbound ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[75%] rounded-lg px-3 py-2 text-sm shadow-sm ${
+                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm shadow-sm sm:max-w-[75%] ${
                     outbound
                       ? "rounded-br-none bg-[#dcf8c6]"
                       : "rounded-bl-none bg-white"
@@ -91,9 +115,9 @@ export function MessageThread({
         <div ref={bottomRef} />
       </div>
 
-      <div className="flex gap-2 border-t border-lumi-border bg-white p-3">
+      <div className="flex gap-2 border-t border-lumi-border bg-white p-3 safe-pb">
         <textarea
-          rows={2}
+          rows={1}
           placeholder="Type a message…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -103,17 +127,17 @@ export function MessageThread({
               submit();
             }
           }}
-          className="min-h-[44px] flex-1 resize-none rounded-lg border border-lumi-border px-3 py-2 text-sm"
+          className="min-h-[44px] max-h-32 flex-1 resize-none rounded-lg border border-lumi-border px-3 py-2.5 text-base md:text-sm"
         />
         <button
           type="button"
           disabled={sending || !draft.trim()}
           onClick={submit}
-          className="self-end rounded-lg bg-lumi-blue px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="min-h-[44px] self-end rounded-lg bg-lumi-blue px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 sm:px-5"
         >
           {sending ? "…" : "Send"}
         </button>
       </div>
-    </>
+    </div>
   );
 }

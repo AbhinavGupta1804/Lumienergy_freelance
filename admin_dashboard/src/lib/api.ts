@@ -26,6 +26,7 @@ export type Conversation = {
   last_message?: string;
   last_message_at?: string;
   last_direction?: string;
+  unread_count?: number;
 };
 
 export type TimelineEvent = {
@@ -108,8 +109,14 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function fetchConversations(q = "") {
+export function fetchConversations(
+  q = "",
+  lastReadByPhone: Record<string, string> = {},
+) {
   const params = new URLSearchParams({ q });
+  if (Object.keys(lastReadByPhone).length > 0) {
+    params.set("reads", JSON.stringify(lastReadByPhone));
+  }
   return apiFetch<{ conversations: Conversation[]; count: number }>(
     `/api/admin/conversations?${params}`,
   );

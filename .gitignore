@@ -16,3 +16,20 @@ data/*.db
 credentials/*.json
 !credentials/.gitkeep
 .ngrok/
+.vercel
+.env*
+
+# Dependencies / local installs — never commit
+**/node_modules/
+google-cloud-sdk/
+google-cloud-cli*.tar.gz
+google-cloud-cli*.zip
+
+# Accidental local screenshots / one-off downloads at repo root
+/xolar.ca_residential-solar-quote_.png
+/localhost_3000_offers_zero-down-offer*.png
+/solarmeusa.com_services_solar-panel.png
+/meta.oretuagency.com_.png
+/Logan Sage.pdf
+
+*.log

@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     test_mode: bool = True
     test_call_number: str = "+919752713547"
 
+    # --- Outbound voice agent (ElevenLabs) ---
+    # When false, leads are still accepted and stored but no AI calls are placed.
+    voice_agent_enabled: bool = True
+
     # --- ElevenLabs Conversational AI (handles Twilio outbound via their API) ---
     elevenlabs_api_key: str = ""
     elevenlabs_agent_id: str = ""
@@ -70,6 +74,14 @@ class Settings(BaseSettings):
     # A2P 10DLC: send SMS via Messaging Service (required for US delivery after 10DLC)
     twilio_messaging_service_sid: str = ""  # e.g. MGxxxxxxxx — preferred over From number
 
+    # --- Instant welcome SMS (Stage 0 — on form submit) ---
+    welcome_sms_enabled: bool = True
+    welcome_sms_body: str = (
+        "Thanks for requesting info on solar with Lumi Energy! 🌞 "
+        "Someone from our team will be reaching out shortly to answer your questions. "
+        "Talk soon!"
+    )
+
     # --- Post-call notifications (bill upload link) ---
     # Channel: sms (Twilio) or email (SMTP). Same channel used for confirmation after upload.
     notification_channel: str = "sms"  # sms | email
@@ -84,7 +96,11 @@ class Settings(BaseSettings):
     sms_support_phone: str = "+1 (480) 252-6872"
 
     # --- Email — used when NOTIFICATION_CHANNEL=email ---
+    # Master kill switch for ALL outbound email (Resend, SMTP, reports, follow-ups).
+    email_enabled: bool = True
     # Prefer Resend when RESEND_API_KEY is set; otherwise SMTP.
+    # When false, no emails are sent via Resend (report, follow-ups, bill/confirm).
+    resend_enabled: bool = True
     resend_api_key: str = ""
     resend_from_email: str = "support@lumienergy.us"
     smtp_host: str = ""
@@ -107,7 +123,9 @@ class Settings(BaseSettings):
     # Shared secret — bill_upload Vercel app sends X-Bill-Upload-Webhook-Secret header
     bill_upload_webhook_secret: str = ""
     # Validate X-Twilio-Signature on status callbacks (recommended in production)
-    twilio_validate_webhook_signatures: bool = True
+    # Off by default: Cloud Run URL/proxy mismatches often 403 real Twilio
+    # inbound SMS (Error 11200) and replies never reach the CRM.
+    twilio_validate_webhook_signatures: bool = False
 
     # --- Cal.com scheduling (proxy used by ElevenLabs get_available_slots tool) ---
     cal_api_key: str = ""  # Cal.com API key (Bearer token)
@@ -144,11 +162,34 @@ class Settings(BaseSettings):
     callback_reconcile_after_minutes: int = 3
 
     # --- Report follow-up emails (unbooked leads) ---
-    followup_email_enabled: bool = True
+    followup_email_enabled: bool = False
     followup_email_max_attempts: int = 4
     followup_email_interval_days: int = 2
     followup_email_send_hour: int = 8  # 08:30 business timezone
     followup_email_send_minute: int = 30
+
+    # --- Zoho CRM webhooks (custom buttons → FastAPI) ---
+    zoho_webhook_secret: str = ""
+    # Outbound Zoho CRM (Attachments API) — same OAuth app as Apps Script new.gs
+    zoho_client_id: str = ""
+    zoho_client_secret: str = ""
+    zoho_refresh_token: str = ""
+    zoho_accounts_url: str = "https://accounts.zoho.com"
+    zoho_api_domain: str = "https://www.zohoapis.com"
+
+    # --- SMS nurture sequence (Stage 1 booked + Stage 2 no-answer) ---
+    nurture_sms_enabled: bool = True
+    nurture_sms_quiet_start_hour: int = 9  # America/Phoenix
+    nurture_sms_quiet_end_hour: int = 20
+    # Deprecated: Stage 2 touch 1 sends immediately on Zoho activate webhook.
+    # Kept for env compat; not used for scheduling.
+    nurture_sms_first_touch_delay_hours: float = 0.0
+    nurture_rep_name: str = "Alex"
+    nurture_company_phone: str = "+1 (480) 252-6872"
+    nurture_google_reviews_url: str = ""
+    nurture_founder_video_url: str = ""
+    nurture_website_url: str = "https://lumienergy.us"
+    nurture_bill_upload_base_url: str = ""  # falls back to sms_bill_upload_base_url
 
     # --- Cloud Tasks job backend ---
     # auto = use Cloud Tasks when project/queue/secret/public URL are set

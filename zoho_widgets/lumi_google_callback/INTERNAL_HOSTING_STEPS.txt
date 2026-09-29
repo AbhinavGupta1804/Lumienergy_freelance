@@ -1,0 +1,37 @@
+INTERNAL HOSTING — Schedule Callback Widget
+
+Use this zip (built with official Zoho `zet pack`):
+  lumi_google_callback_INTERNAL_HOSTING.zip
+
+IMPORTANT
+  Editing the existing widget + “Change” zip DOES NOT replace Zoho’s
+  hosted files. I verified the live URL is still the OLD broken package.
+  You MUST delete the widget and create a new one.
+
+Steps
+  1. Setup → Customization → Modules → Leads → Buttons
+     Open “Schedule Follow up on calendar” → Remove the widget → Save
+
+  2. Setup → Developer Hub → Widgets
+     Delete “Schedule follow up” completely
+
+  3. Create New Widget
+     - Name: Schedule follow up
+     - Type: Button
+     - Hosting: Zoho
+     - Upload: lumi_google_callback_INTERNAL_HOSTING.zip
+     - Index Page: /app/widget.html
+     - Save
+
+  4. Prove the new package deployed
+     Copy Base URL from the widget form (ends with /app).
+     Open in Chrome:  <Base URL>/widget.html
+     View page source — must contain:
+       live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js
+     If you see js.zohostatic.com/crm/v8/ — delete & recreate again.
+     Base URL hash in the path should also change vs the old one.
+
+  5. Re-attach button
+     Leads → Buttons → Open a Widget → pick the NEW widget → Save
+
+  6. Hard refresh the Lead (Ctrl+Shift+R) and click the button

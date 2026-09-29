@@ -1,0 +1,37 @@
+void automation.send_stage1_sms_booked(Int leadId)
+{
+leadIdStr = leadId.toString();
+lead = zoho.crm.getRecordById("Leads",leadIdStr);
+if(lead == null)
+{
+	info "Lead not found: " + leadIdStr;
+	return;
+}
+BASE_URL = "https://arizona-solar-581026638648.us-west4.run.app";
+SECRET = "MigkY4az41qY_RpU2DURPdbQkvgh4CEv";
+payload = Map();
+payload.put("id",leadIdStr);
+payload.put("phone",ifnull(lead.get("Phone"),"").toString());
+payload.put("email",ifnull(lead.get("Email"),"").toString());
+payload.put("first_name",ifnull(lead.get("First_Name"),"").toString());
+payload.put("last_name",ifnull(lead.get("Last_Name"),"").toString());
+payload.put("address",ifnull(lead.get("Addressss"),"").toString());
+headers = Map();
+headers.put("Content-Type","application/json");
+headers.put("X-Zoho-Webhook-Secret",SECRET);
+headers.put("ngrok-skip-browser-warning","true");
+resp = invokeurl
+[
+	url :BASE_URL + "/webhooks/zoho/book-appointment"
+	type :POST
+	parameters:payload.toString()
+	headers:headers
+	detailed:true
+];
+info resp;
+code = ifnull(resp.get("responseCode"),0);
+if(code != 200)
+{
+	info "book-appointment failed HTTP " + code + " body=" + ifnull(resp.get("responseText"),resp);
+}
+}

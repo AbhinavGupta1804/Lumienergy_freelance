@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from app.config import get_settings
 from app.integrations.elevenlabs import ElevenLabsClient, ElevenLabsCallError
 from app.integrations.twilio_calls import attach_status_callback
 from app.models.lead import Lead
@@ -69,6 +70,33 @@ class CallOrchestrator:
 
         Returns a status dict for logging / API responses.
         """
+        if not get_settings().voice_agent_enabled:
+            logger.info(
+                "Voice agent disabled — skipping dial for row %s (%s)",
+                lead.row_number,
+                lead.row_key,
+            )
+            if not self._dedup.is_processed(lead.row_key):
+                self._dedup.mark_processed(
+                    row_key=lead.row_key,
+                    row_number=lead.row_number,
+                    name=lead.full_name,
+                    address=lead.address,
+                    email=lead.email,
+                    phone_no=lead.phone_no_e164,
+                    dial_to=normalize_e164(lead.dial_number) or normalize_e164(lead.phone_no),
+                    status="skipped",
+                    track_callback=False,
+                    offer_page=lead.offer_page,
+                    monthly_bill=lead.monthly_bill,
+                    zoho_lead_id=lead.zoho_lead_id,
+                )
+            return {
+                "skipped": True,
+                "reason": "voice_agent_disabled",
+                "row_key": lead.row_key,
+            }
+
         if self._dedup.is_processed(lead.row_key):
             logger.info("Skipping row %s — already processed", lead.row_number)
             return {"skipped": True, "reason": "already_processed", "row_key": lead.row_key}
@@ -103,6 +131,7 @@ class CallOrchestrator:
                 track_callback=False,
                 offer_page=lead.offer_page,
                 monthly_bill=lead.monthly_bill,
+                zoho_lead_id=lead.zoho_lead_id,
             )
             await self._send_report_on_dial_fail(lead.row_key)
             return {
@@ -124,11 +153,20 @@ class CallOrchestrator:
             sms_eligible=lead.transactional_sms_consent,
             offer_page=lead.offer_page,
             monthly_bill=lead.monthly_bill,
+            zoho_lead_id=lead.zoho_lead_id,
         )
 
     async def retry_call_for_row(self, row: dict) -> dict:
         """Scheduled callback — reuse stored lead row."""
         row_key = row.get("row_key") or ""
+        if not get_settings().voice_agent_enabled:
+            logger.info("Voice agent disabled — skipping callback dial row_key=%s", row_key)
+            self._dedup.release_call_in_progress(row_key)
+            return {
+                "skipped": True,
+                "reason": "voice_agent_disabled",
+                "row_key": row_key,
+            }
         to_number = normalize_e164(row.get("dial_to") or row.get("phone_no") or "")
         if not to_number:
             self._dedup.release_call_in_progress(row_key)
@@ -146,6 +184,7 @@ class CallOrchestrator:
             is_retry=True,
             first_name=first,
             last_name=last,
+            zoho_lead_id=(row.get("zoho_lead_id") or ""),
         )
 
     async def _dial(
@@ -164,6 +203,7 @@ class CallOrchestrator:
         sms_eligible: bool = False,
         offer_page: str = "",
         monthly_bill: float = 0.0,
+        zoho_lead_id: str = "",
     ) -> dict:
         if not first_name and not last_name:
             first_name, last_name = _name_parts(name)
@@ -205,10 +245,14 @@ class CallOrchestrator:
                     name=name,
                     address=address,
                     email=email,
+                    phone_no=phone_no,
+                    dial_to=to_number,
                     status="failed",
                     track_callback=False,
+                    sms_eligible=sms_eligible,
                     offer_page=offer_page,
                     monthly_bill=monthly_bill,
+                    zoho_lead_id=zoho_lead_id,
                 )
                 await self._send_report_on_dial_fail(row_key)
             return {"skipped": False, "success": False, "error": str(exc), "row_key": row_key}
@@ -245,6 +289,7 @@ class CallOrchestrator:
                 sms_eligible=sms_eligible,
                 offer_page=offer_page,
                 monthly_bill=monthly_bill,
+                zoho_lead_id=zoho_lead_id,
             )
 
         logger.info(

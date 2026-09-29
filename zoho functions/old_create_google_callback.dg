@@ -1,0 +1,132 @@
+string standalone.create_google_callback(String crmAPIRequest)
+{
+// ==========================================
+// 1. GET DATA FROM THE WIDGET
+// ==========================================
+requestMap = crmAPIRequest.toMap();
+params = requestMap.get("params");
+args = params.get("arguments").toMap();
+leadId = args.get("lead_id");
+leadName = args.get("lead_name");
+phone = args.get("phone");
+callbackDate = args.get("date");
+callbackTime = args.get("time");
+duration = args.get("duration_minutes");
+notes = args.get("notes");
+// ==========================================
+// 2. VALIDATE INPUT
+// ==========================================
+if(callbackDate == null || callbackDate == "")
+{
+	return "ERROR: Callback date is required.";
+}
+if(callbackTime == null || callbackTime == "")
+{
+	return "ERROR: Callback time is required.";
+}
+if(duration == null || duration == "")
+{
+	return "ERROR: Callback duration is required.";
+}
+// ==========================================
+// 3. CONVERT DATE + TIME
+//    ARIZONA TIME
+// ==========================================
+startDateTimeText = callbackDate + " " + callbackTime + ":00";
+startDateTime = toTime(startDateTimeText,"yyyy-MM-dd HH:mm:ss","America/Phoenix");
+durationNumber = duration.toLong();
+endDateTime = startDateTime.addMinutes(durationNumber);
+// ==========================================
+// 4. FORMAT FOR GOOGLE CALENDAR
+// ==========================================
+startString = startDateTime.toString("yyyy-MM-dd'T'HH:mm:ss","America/Phoenix");
+endString = endDateTime.toString("yyyy-MM-dd'T'HH:mm:ss","America/Phoenix");
+// ==========================================
+// 5. CREATE EVENT TITLE
+// ==========================================
+summary = "Callback - " + leadName;
+// ==========================================
+// 6. CREATE EVENT DESCRIPTION
+// ==========================================
+description = "Lumi Energy Callback\n\n";
+description = description + "Lead: " + leadName + "\n";
+if(phone != null && phone != "")
+{
+	description = description + "Phone: " + phone + "\n";
+}
+if(notes != null && notes != "")
+{
+	description = description + "\nNotes:\n" + notes;
+}
+if(leadId != null && leadId != "")
+{
+	description = description + "\n\nZoho Lead ID: " + leadId;
+}
+// ==========================================
+// 7. GOOGLE CALENDAR START
+// ==========================================
+startMap = Map();
+startMap.put("dateTime",startString);
+startMap.put("timeZone","America/Phoenix");
+// ==========================================
+// 8. GOOGLE CALENDAR END
+// ==========================================
+endMap = Map();
+endMap.put("dateTime",endString);
+endMap.put("timeZone","America/Phoenix");
+// ==========================================
+// 9. BUILD GOOGLE EVENT
+// ==========================================
+eventMap = Map();
+eventMap.put("summary",summary);
+eventMap.put("description",description);
+eventMap.put("start",startMap);
+eventMap.put("end",endMap);
+// VERY IMPORTANT:
+// Transparent = FREE / does not block calendar availability
+eventMap.put("transparency","transparent");
+eventMap.put("eventType","default");
+// ==========================================
+// 10. REMINDER
+// ==========================================
+reminderOverride = Map();
+reminderOverride.put("method","popup");
+reminderOverride.put("minutes",10);
+reminderList = List();
+reminderList.add(reminderOverride);
+remindersMap = Map();
+remindersMap.put("useDefault",false);
+remindersMap.put("overrides",reminderList);
+eventMap.put("reminders",remindersMap);
+// ==========================================
+// 11. SEND EVENT TO GOOGLE CALENDAR
+// ==========================================
+response = invokeurl
+[
+	url :"https://www.googleapis.com/calendar/v3/calendars/primary/events"
+	type :POST
+	body:eventMap.toString()
+	headers:{"Content-Type":"application/json"}
+	connection:"google_calendar_callback"
+];
+// ==========================================
+// 12. CHECK RESPONSE
+// ==========================================
+info response;
+if(response != null)
+{
+	if(response.containKey("id"))
+	{
+		result = Map();
+		result.put("status","success");
+		result.put("message","Callback scheduled successfully.");
+		result.put("event_id",response.get("id"));
+		result.put("calendar_link",response.get("htmlLink"));
+		return result.toString();
+	}
+}
+// ==========================================
+// 13. ERROR
+// ==========================================
+return "ERROR: Google Calendar event could not be created.\n\n" + response;
+}

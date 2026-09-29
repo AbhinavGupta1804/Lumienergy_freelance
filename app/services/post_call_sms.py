@@ -16,6 +16,7 @@ from app.services.message_logger import log_outbound_failure, log_outbound_messa
 from app.utils.dedup_store import DedupStore
 from app.utils.message_store import CustomerMessageStore
 from app.utils.phone import normalize_e164
+from app.utils.sms_consent import lead_allows_transactional_sms
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ class PostCallSmsService:
         if channel == "sms" and not phone:
             return {"action": "skipped", "reason": "no_phone", "source": source, "channel": channel}
 
-        if channel == "sms" and not row.get("sms_eligible"):
+        if channel == "sms" and not lead_allows_transactional_sms(row):
             logger.info(
                 "Skip bill-upload SMS — no transactional consent call_sid=%s row_key=%s",
                 call_sid,

@@ -18,6 +18,7 @@ from app.utils.appointment_format import format_appointment_parts
 from app.utils.dedup_store import DedupStore
 from app.utils.message_store import CustomerMessageStore
 from app.utils.phone import normalize_e164
+from app.utils.sms_consent import lead_allows_transactional_sms
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class BillUploadConfirmationSmsService:
         ).strip()
         email = (row.get("email") or "").strip()
 
-        if notification_channel() == "sms" and not row.get("sms_eligible"):
+        if notification_channel() == "sms" and not lead_allows_transactional_sms(row):
             logger.info(
                 "Skip confirmation SMS — no transactional consent row_key=%s",
                 row_key,

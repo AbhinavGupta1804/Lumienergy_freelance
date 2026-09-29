@@ -1,0 +1,54 @@
+/*
+  Zoho workflow / automation — Stage 1 SMS after appointment booked.
+
+  Signature (keep Int if your workflow already passes Int):
+    void automation.send_stage1_sms_booked(Int leadId)
+
+  Paste into Zoho → replace BASE_URL / SECRET if needed.
+*/
+
+void automation.send_stage1_sms_booked(Int leadId)
+{
+	leadIdStr = leadId.toString();
+	lead = zoho.crm.getRecordById("Leads", leadIdStr);
+	if(lead == null)
+	{
+		info "Lead not found: " + leadIdStr;
+		return;
+	}
+
+	BASE_URL = "https://maya-unanemic-honey.ngrok-free.dev";
+	SECRET = "MigkY4az41qY_RpU2DURPdbQkvgh4CEv";
+
+	// All values as text — large Zoho ids break if sent as JSON numbers
+	payload = Map();
+	payload.put("id", leadIdStr);
+	payload.put("phone", ifnull(lead.get("Phone"), "").toString());
+	payload.put("email", ifnull(lead.get("Email"), "").toString());
+	payload.put("first_name", ifnull(lead.get("First_Name"), "").toString());
+	payload.put("last_name", ifnull(lead.get("Last_Name"), "").toString());
+	// Custom address API name in this org (four s's)
+	payload.put("address", ifnull(lead.get("Addressss"), "").toString());
+
+	headers = Map();
+	headers.put("Content-Type", "application/json");
+	headers.put("X-Zoho-Webhook-Secret", SECRET);
+	// ngrok free interstitial otherwise blocks Zoho → FastAPI
+	headers.put("ngrok-skip-browser-warning", "true");
+
+	resp = invokeurl
+	[
+		url : BASE_URL + "/webhooks/zoho/book-appointment"
+		type : POST
+		parameters : payload.toString()
+		headers : headers
+		detailed : true
+	];
+	info resp;
+
+	code = ifnull(resp.get("responseCode"), 0);
+	if(code != 200)
+	{
+		info "book-appointment failed HTTP " + code + " body=" + ifnull(resp.get("responseText"), resp);
+	}
+}

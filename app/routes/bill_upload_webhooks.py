@@ -1,5 +1,8 @@
 """
-Webhooks called by the Vercel bill-upload app after a successful upload.
+Webhooks called after a successful bill upload (website or Vercel uploader).
+
+POST /webhooks/bill-upload/complete
+  → attach bill file to Zoho CRM Lead
 """
 
 import logging
@@ -9,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.services.bill_upload_confirmation_sms import BillUploadConfirmationSmsService
+from app.services.zoho_bill_attachment import ZohoBillAttachmentService
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +41,28 @@ async def bill_upload_complete(
     ),
 ) -> JSONResponse:
     """
-    Called by bill_upload/api/upload.js after storage + DB update succeed.
+    Called by LUMI SOLAR WEBSITE (or legacy Vercel upload.js) after storage + DB succeed.
 
-    Sends consultation confirmation SMS with appointment time.
+    Attaches the uploaded bill image/PDF to the matching Zoho Lead.
     """
     _check_secret(x_bill_upload_webhook_secret)
 
-    if not hasattr(request.app.state, "bill_upload_confirmation_sms_service"):
+    if not hasattr(request.app.state, "dedup_store"):
         raise HTTPException(status_code=500, detail="Service not configured")
 
-    service: BillUploadConfirmationSmsService = (
-        request.app.state.bill_upload_confirmation_sms_service
+    zoho_result: dict = {"action": "skipped", "reason": "service_unavailable"}
+    try:
+        store = request.app.state.dedup_store
+        zoho_service = ZohoBillAttachmentService(store)
+        zoho_result = await zoho_service.attach_for_upload_token(body.upload_token)
+        logger.info("Bill-upload Zoho attach: %s", zoho_result)
+    except Exception:
+        logger.exception("Bill-upload Zoho attach crashed token=%s", body.upload_token)
+        zoho_result = {"action": "failed", "error": "unexpected_exception"}
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "zoho_attach": zoho_result,
+        }
     )
-    result = await service.on_bill_uploaded(body.upload_token)
-    logger.info("Bill-upload confirmation SMS: %s", result)
-    return JSONResponse({"ok": True, **result})

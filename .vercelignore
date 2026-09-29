@@ -1,0 +1,32 @@
+# Monorepo: Vercel project rootDirectory is admin_dashboard.
+# Exclude heavy / unrelated paths so CLI stays under file limits.
+
+google-cloud-sdk/**
+.venv/**
+venv/**
+.git/**
+.ngrok/**
+**/node_modules/**
+**/.next/**
+**/__pycache__/**
+**/*.pyc
+**/.env
+**/.env.*
+!**/.env.example
+**/tsconfig.tsbuildinfo
+**/*.db
+**/*.zip
+
+# Backend / non-dashboard (Next build only needs admin_dashboard)
+app/**
+scripts/**
+tests/**
+docs/**
+zoho functions/**
+zoho_widgets/**
+credentials/**
+data/**
+*.py
+requirements*.txt
+Dockerfile*
+docker-compose*

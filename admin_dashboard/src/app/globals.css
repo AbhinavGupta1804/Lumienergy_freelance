@@ -5,8 +5,26 @@
 html,
 body {
   height: 100%;
+  height: 100dvh;
 }
 
 body {
   @apply bg-lumi-bg text-gray-900 antialiased;
+  /* Avoid iOS bounce scrolling the whole app behind panels */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Comfortable touch targets on mobile */
+@layer utilities {
+  .safe-pb {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .safe-pt {
+    padding-top: max(0px, env(safe-area-inset-top));
+  }
+  .safe-px {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+  }
 }

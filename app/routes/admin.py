@@ -4,6 +4,7 @@ Admin dashboard API — calls, bills, SMS conversations, WebSocket.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -14,6 +15,7 @@ from app.services.admin_service import AdminServiceError, get_admin_service
 from app.services.message_logger import log_outbound_failure, log_outbound_message
 from app.services.post_call_report import REPORT_ELIGIBLE_OFFERS
 from app.utils.phone import normalize_e164
+from app.utils.sms_consent import lead_allows_transactional_sms
 from app.utils.ws_hub import admin_ws_hub
 
 logger = logging.getLogger(__name__)
@@ -49,8 +51,29 @@ async def admin_websocket(websocket: WebSocket) -> None:
 async def list_conversations(
     q: str = Query("", description="Search name, phone, message"),
     limit: int = Query(200, ge=1, le=500),
+    reads: str = Query(
+        "",
+        description='JSON map of phone → last-read ISO timestamp, e.g. {"+15551212":"2026-01-01T00:00:00Z"}',
+    ),
 ) -> dict:
-    rows = _service().list_conversations(q=q, limit=limit)
+    last_read_by_phone: dict[str, str] = {}
+    if reads.strip():
+        try:
+            raw = json.loads(reads)
+            if isinstance(raw, dict):
+                for phone, ts in raw.items():
+                    if not phone or not ts:
+                        continue
+                    normalized = normalize_e164(str(phone)) or str(phone).strip()
+                    if normalized:
+                        last_read_by_phone[normalized] = str(ts)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("Ignoring invalid conversations reads JSON")
+    rows = _service().list_conversations(
+        q=q,
+        limit=limit,
+        last_read_by_phone=last_read_by_phone,
+    )
     return {"conversations": rows, "count": len(rows)}
 
 
@@ -91,13 +114,25 @@ async def send_conversation_message(
         raise HTTPException(status_code=400, detail="Message body is required")
 
     dedup_store = getattr(request.app.state, "dedup_store", None)
-    if dedup_store:
-        lead_row = dedup_store.get_latest_called_by_phone(to_number)
-        if lead_row and not lead_row.get("sms_eligible"):
-            raise HTTPException(
-                status_code=403,
-                detail="Transactional SMS consent is not Yes for this customer",
-            )
+    if not dedup_store:
+        raise HTTPException(
+            status_code=503,
+            detail="Lead store unavailable — cannot verify SMS consent",
+        )
+
+    lead_row = dedup_store.find_lead_by_phone(
+        to_number
+    ) or dedup_store.get_latest_called_by_phone(to_number)
+    if not lead_allows_transactional_sms(lead_row):
+        raise HTTPException(
+            status_code=403,
+            detail="Transactional SMS consent is not Yes for this customer",
+        )
+    if dedup_store.is_sms_opted_out(to_number):
+        raise HTTPException(
+            status_code=403,
+            detail="Customer has opted out of SMS (STOP)",
+        )
 
     try:
         result = await send_sms(to_number=to_number, body=body)
@@ -105,7 +140,6 @@ async def send_conversation_message(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     message_store = getattr(request.app.state, "message_store", None)
-    dedup_store = getattr(request.app.state, "dedup_store", None)
 
     if message_store:
         if result.success:

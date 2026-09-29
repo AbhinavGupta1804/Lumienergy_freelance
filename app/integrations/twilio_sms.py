@@ -61,6 +61,18 @@ def build_confirmation_sms_body(
     )
 
 
+def build_welcome_sms_body() -> str:
+    """Stage 0 — instant confirmation when a lead submits the form."""
+    settings = get_settings()
+    if settings.welcome_sms_body:
+        return settings.welcome_sms_body.strip()
+    return (
+        "Thanks for requesting info on solar with Lumi Energy! 🌞 "
+        "Someone from our team will be reaching out shortly to answer your questions. "
+        "Talk soon!"
+    )
+
+
 def build_sms_body(upload_link: str | None = None, *, first_name: str = "") -> str:
     """
     Post-call bill upload SMS.

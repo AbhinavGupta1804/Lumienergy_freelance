@@ -56,6 +56,8 @@ class CallbackService:
         After ElevenLabs post-call: fetch Twilio status, stop or schedule next retry.
         """
         settings = get_settings()
+        if not settings.voice_agent_enabled:
+            return {"action": "skipped", "reason": "voice_agent_disabled"}
         if not settings.callback_enabled:
             return {"action": "skipped", "reason": "callback_disabled"}
 
@@ -127,6 +129,8 @@ class CallbackService:
         (no-answer, busy, declined). Schedule callbacks like an unanswered call.
         """
         settings = get_settings()
+        if not settings.voice_agent_enabled:
+            return {"action": "skipped", "reason": "voice_agent_disabled", "answered": False}
         if not settings.callback_enabled:
             return {"action": "skipped", "reason": "callback_disabled", "answered": False}
 

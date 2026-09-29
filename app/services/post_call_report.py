@@ -30,7 +30,6 @@ from app.integrations.resend_email import send_email_resend
 from app.integrations.sheet_columns import parse_monthly_bill
 from app.services.job_scheduler import schedule_followup_email_job
 from app.services.message_logger import log_outbound_message, log_outbound_failure
-from app.services.report_generator import ReportGenerator, ReportInput
 from app.utils.dedup_store import DedupStore
 from app.utils.message_store import CustomerMessageStore
 
@@ -250,7 +249,15 @@ class PostCallReportService:
     ) -> None:
         self._store = store
         self._message_store = message_store
-        self._report_gen = ReportGenerator()
+        self._report_gen = None
+
+    def _get_report_gen(self):
+        """Lazy-load PDF deps (jinja2/matplotlib/playwright) only when email reports run."""
+        if self._report_gen is None:
+            from app.services.report_generator import ReportGenerator
+
+            self._report_gen = ReportGenerator()
+        return self._report_gen
 
     async def on_conversation_ended(
         self,
@@ -291,6 +298,11 @@ class PostCallReportService:
         context: str = "",
     ) -> dict[str, Any]:
         from app.integrations.sheet_columns import normalize_offer_page
+
+        settings = get_settings()
+        if not settings.email_enabled:
+            logger.info("Report email skipped — EMAIL_ENABLED=false %s", context)
+            return {"action": "skipped", "reason": "email_disabled"}
 
         offer_page = normalize_offer_page(row.get("offer_page"))
         if offer_page not in REPORT_ELIGIBLE_OFFERS:
@@ -333,6 +345,8 @@ class PostCallReportService:
         )
 
         try:
+            from app.services.report_generator import ReportInput
+
             report_input = ReportInput(
                 first_name=first_name,
                 last_name=last_name,
@@ -343,7 +357,7 @@ class PostCallReportService:
                 include_calendar_link=include_calendar_link,
             )
             pdf_bytes = await asyncio.to_thread(
-                self._report_gen.generate_pdf_bytes, report_input
+                self._get_report_gen().generate_pdf_bytes, report_input
             )
         except Exception:
             logger.exception("Report PDF generation failed %s", context or row_key)
@@ -414,7 +428,7 @@ class PostCallReportService:
         self._store.mark_report_sent(row_key=row_key, report_email_type=email_type)
 
         # Not booked --> start the 4-step follow-up email chain (every 2 days, 08:30)
-        if include_calendar_link and settings.followup_email_enabled:
+        if include_calendar_link and settings.email_enabled and settings.followup_email_enabled:
             next_at = compute_next_followup_at(settings.followup_email_interval_days)
             self._store.schedule_followup_email(row_key=row_key, next_at_iso=next_at)
             job = schedule_followup_email_job(
@@ -463,7 +477,7 @@ class PostCallReportService:
         Stops early if the lead booked (agent booking or Cal.com self-booking).
         """
         settings = get_settings()
-        if not settings.followup_email_enabled:
+        if not settings.email_enabled or not settings.followup_email_enabled:
             return {"action": "skipped", "reason": "followup_disabled"}
 
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -486,6 +500,9 @@ class PostCallReportService:
 
     async def _send_followup_for_row(self, row: dict[str, Any]) -> dict[str, Any]:
         settings = get_settings()
+        if not settings.email_enabled or not settings.followup_email_enabled:
+            return {"action": "skipped", "reason": "followup_disabled"}
+
         row_key = row.get("row_key") or ""
         attempt = int(row.get("followup_email_attempt") or 0) + 1
 

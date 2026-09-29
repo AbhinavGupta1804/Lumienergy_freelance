@@ -165,8 +165,8 @@ def create_http_task(
         "schedule_time": ts,
     }
 
-    client = _client()
     try:
+        client = _client()
         # Replace if a prior task with this id still exists
         try:
             client.delete_task(name=task_name)
@@ -200,6 +200,11 @@ def delete_task_by_id(task_id: str) -> bool:
         _client().delete_task(name=name)
         logger.info("Cloud Task deleted name=%s", name)
         return True
-    except Exception:
-        logger.debug("Cloud Task delete skipped/failed name=%s", name, exc_info=True)
+    except Exception as exc:
+        # Not-found is common if already deleted; still surface at INFO for ops.
+        logger.info(
+            "Cloud Task delete skipped name=%s reason=%s",
+            name,
+            exc,
+        )
         return False

@@ -299,39 +299,54 @@ export function CallsView() {
     }
   };
 
+  const showDetail = Boolean(selectedKey);
+
+  const selectLead = (rowKey: string) => {
+    setSelectedKey(rowKey);
+    setPreviewUrl(null);
+  };
+
+  const clearSelection = () => {
+    setSelectedKey(null);
+    setDetail(null);
+    setTimeline([]);
+    setPreviewUrl(null);
+  };
+
   return (
     <div className="flex h-full">
-      <section className="flex w-[58%] flex-col border-r border-lumi-border bg-white">
-        <div className="border-b border-lumi-border p-3 space-y-3">
+      <section
+        className={`flex w-full flex-col border-r border-lumi-border bg-white lg:w-[58%] ${
+          showDetail ? "hidden lg:flex" : "flex"
+        }`}
+      >
+        <div className="space-y-3 border-b border-lumi-border p-3">
           <div className="flex gap-2">
             <input
               type="search"
-              placeholder="Search name, phone, email, offer…"
+              placeholder="Search name, phone, email…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="flex-1 rounded-lg border border-lumi-border px-3 py-2 text-sm"
+              className="min-h-[44px] flex-1 rounded-lg border border-lumi-border px-3 py-2 text-base md:text-sm"
             />
             <button
               type="button"
               onClick={load}
-              className="rounded-lg border border-lumi-border px-3 py-2 text-sm hover:bg-lumi-bg"
+              className="min-h-[44px] rounded-lg border border-lumi-border px-3 py-2 text-sm hover:bg-lumi-bg"
             >
               Refresh
             </button>
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex-wrap lg:overflow-visible">
             {STAGE_CHIPS.map((chip) => {
-              const count =
-                chip.id === "all"
-                  ? counts.all
-                  : counts[chip.id];
+              const count = chip.id === "all" ? counts.all : counts[chip.id];
               const active = filter === chip.id;
               return (
                 <button
                   key={chip.id}
                   type="button"
                   onClick={() => setFilter(chip.id)}
-                  className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
+                  className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition ${
                     active
                       ? "bg-lumi-blue text-white"
                       : "bg-lumi-bg text-lumi-muted hover:text-gray-900"
@@ -349,7 +364,52 @@ export function CallsView() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto">
+        {/* Mobile card list */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:hidden">
+          {loading ? (
+            <p className="p-4 text-center text-sm text-lumi-muted">Loading…</p>
+          ) : calls.length === 0 ? (
+            <p className="p-4 text-center text-sm text-lumi-muted">No leads found</p>
+          ) : (
+            calls.map((row) => (
+              <button
+                key={row.row_key}
+                type="button"
+                onClick={() => selectLead(row.row_key)}
+                className="flex w-full flex-col gap-1.5 border-b border-lumi-border px-4 py-3.5 text-left active:bg-blue-50"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold text-sm">
+                      {row.name || "—"}
+                    </div>
+                    <div className="truncate text-xs text-lumi-muted">
+                      {row.dial_to || row.phone_no || "—"}
+                    </div>
+                  </div>
+                  {stagePill(row)}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-lumi-muted">
+                  <span>{offerLabel(row.offer_page)}</span>
+                  {row.callback_attempt != null ? (
+                    <span>· {row.callback_attempt} tries</span>
+                  ) : null}
+                  {row.appointment_label || row.self_booked ? (
+                    <span>
+                      · {row.appointment_label || (row.self_booked ? "Self" : "")}
+                    </span>
+                  ) : null}
+                </div>
+                {row.next_action ? (
+                  <p className="line-clamp-2 text-xs text-gray-600">{row.next_action}</p>
+                ) : null}
+              </button>
+            ))
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden min-h-0 flex-1 overflow-auto lg:block">
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 bg-gray-50 text-xs text-lumi-muted">
               <tr>
@@ -381,17 +441,14 @@ export function CallsView() {
                 calls.map((row) => (
                   <tr
                     key={row.row_key}
-                    onClick={() => {
-                      setSelectedKey(row.row_key);
-                      setPreviewUrl(null);
-                    }}
+                    onClick={() => selectLead(row.row_key)}
                     className={`cursor-pointer border-t border-lumi-border hover:bg-lumi-bg ${
                       selectedKey === row.row_key ? "bg-blue-50" : ""
                     }`}
                   >
                     <td className="px-3 py-2">
                       <div className="font-medium">{row.name || "—"}</div>
-                      <div className="text-xs text-lumi-muted whitespace-nowrap">
+                      <div className="whitespace-nowrap text-xs text-lumi-muted">
                         {row.dial_to || row.phone_no || "—"}
                       </div>
                     </td>
@@ -403,17 +460,20 @@ export function CallsView() {
                     <td className="px-3 py-2">{reportPill(row)}</td>
                     <td className="px-3 py-2">{followupEmailPill(row)}</td>
                     <td
-                      className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap"
+                      className="whitespace-nowrap px-3 py-2 text-xs text-gray-700"
                       title={row.next_followup_email_at || ""}
                     >
                       {(row.followup_email_status || "").toLowerCase() === "active"
                         ? fmtAz(row.next_followup_email_at)
                         : "—"}
                     </td>
-                    <td className="px-3 py-2 text-xs max-w-[100px] truncate" title={row.appointment_label || ""}>
+                    <td
+                      className="max-w-[100px] truncate px-3 py-2 text-xs"
+                      title={row.appointment_label || ""}
+                    >
                       {row.appointment_label || (row.self_booked ? "Self" : "—")}
                     </td>
-                    <td className="px-3 py-2 text-xs text-gray-700 max-w-[200px]">
+                    <td className="max-w-[200px] px-3 py-2 text-xs text-gray-700">
                       <span className="line-clamp-2" title={row.next_action || ""}>
                         {row.next_action || "—"}
                       </span>
@@ -424,27 +484,59 @@ export function CallsView() {
             </tbody>
           </table>
         </div>
-        {error && (
+        {error && !showDetail ? (
           <p className="border-t border-red-200 bg-red-50 p-2 text-sm text-red-700">
             {error}
           </p>
-        )}
+        ) : null}
       </section>
 
-      <section className="min-w-0 flex-1 overflow-auto bg-white">
+      <section
+        className={`min-w-0 flex-1 overflow-auto overscroll-contain bg-white ${
+          showDetail ? "flex flex-col" : "hidden lg:block"
+        }`}
+      >
         {!detail ? (
-          <p className="p-6 text-lumi-muted">Select a lead to view journey</p>
+          <p className="hidden p-6 text-lumi-muted lg:block">
+            Select a lead to view journey
+          </p>
         ) : (
-          <div className="p-6">
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold">{detail.name || "Unknown"}</h2>
-                <p className="text-sm text-lumi-muted">
-                  {offerLabel(detail.offer_page)}
-                  {detail.email ? ` · ${detail.email}` : ""}
-                </p>
+          <div className="p-4 sm:p-6">
+            <div className="mb-4 flex items-start gap-2">
+              <button
+                type="button"
+                onClick={clearSelection}
+                aria-label="Back to leads"
+                className="mr-1 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg lg:hidden"
+              >
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="truncate text-lg font-bold sm:text-xl">
+                      {detail.name || "Unknown"}
+                    </h2>
+                    <p className="truncate text-sm text-lumi-muted">
+                      {offerLabel(detail.offer_page)}
+                      {detail.email ? ` · ${detail.email}` : ""}
+                    </p>
+                  </div>
+                  {stagePill(detail)}
+                </div>
               </div>
-              {stagePill(detail)}
             </div>
 
             <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
@@ -499,14 +591,14 @@ export function CallsView() {
               );
             })()}
 
-            <div className="mb-5 flex flex-wrap gap-2">
+            <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <button
                 type="button"
                 disabled={
                   detail.callback_status !== "active" || cancelBusy !== null
                 }
                 onClick={() => doCancelFollowup("calls")}
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-h-[44px] rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {cancelBusy === "calls"
                   ? "Cancelling…"
@@ -523,7 +615,7 @@ export function CallsView() {
                   cancelBusy !== null
                 }
                 onClick={() => doCancelFollowup("emails")}
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                className="min-h-[44px] rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {cancelBusy === "emails"
                   ? "Cancelling…"
@@ -676,14 +768,14 @@ export function CallsView() {
                         <button
                           type="button"
                           onClick={() => viewBill(b)}
-                          className="rounded-md bg-lumi-blue px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                          className="min-h-[40px] rounded-md bg-lumi-blue px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
                         >
                           View
                         </button>
                         <button
                           type="button"
                           onClick={() => downloadBill(b)}
-                          className="rounded-md border border-lumi-border px-3 py-1.5 text-xs hover:bg-lumi-bg"
+                          className="min-h-[40px] rounded-md border border-lumi-border px-3 py-1.5 text-xs hover:bg-lumi-bg"
                         >
                           Download
                         </button>
@@ -730,6 +822,11 @@ export function CallsView() {
                 <Field label="Cal booking" value={detail.cal_booking_uid} mono />
               </FieldGrid>
             </DetailSection>
+            {error ? (
+              <p className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700 lg:hidden">
+                {error}
+              </p>
+            ) : null}
           </div>
         )}
       </section>
@@ -755,7 +852,11 @@ function DetailSection({
 }
 
 function FieldGrid({ children }: { children: React.ReactNode }) {
-  return <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">{children}</dl>;
+  return (
+    <dl className="grid grid-cols-1 gap-x-4 gap-y-3 text-sm sm:grid-cols-2">
+      {children}
+    </dl>
+  );
 }
 
 function Field({
