@@ -28,19 +28,22 @@ async def send_discord_embed(
     description: str,
     fields: list[dict[str, str]] | None = None,
     color: int = 0x2B7A4B,
+    webhook_url: str | None = None,
+    username: str = "Lumi Calls",
 ) -> bool:
     """
-    POST an embed to the configured Discord webhook.
+    POST an embed to a Discord webhook.
 
-    Returns True on success. Raises DiscordNotifyError on misconfiguration.
+    Uses webhook_url if provided, otherwise DISCORD_WEBHOOK_URL.
+    Returns True on success.
     """
     settings = get_settings()
     if not settings.discord_notifications_enabled:
         logger.debug("Discord notifications disabled")
         return False
-    url = (settings.discord_webhook_url or "").strip()
+    url = (webhook_url or settings.discord_webhook_url or "").strip()
     if not url:
-        logger.warning("DISCORD_WEBHOOK_URL not set — skip Discord notification")
+        logger.warning("Discord webhook URL not set — skip notification")
         return False
 
     description = description[:DISCORD_EMBED_DESCRIPTION_LIMIT]
@@ -55,14 +58,14 @@ async def send_discord_embed(
             trimmed.append(
                 {
                     "name": str(f.get("name", ""))[:256],
-                    "value": str(f.get("value", ""))[:DISCORD_FIELD_VALUE_LIMIT],
+                    "value": str(f.get("value", ""))[:DISCORD_FIELD_VALUE_LIMIT] or "—",
                     "inline": bool(f.get("inline", False)),
                 }
             )
         embed["fields"] = trimmed
 
     payload = {
-        "username": "Lumi Calls",
+        "username": (username or "Lumi")[:80],
         "embeds": [embed],
     }
 
@@ -77,5 +80,5 @@ async def send_discord_embed(
         logger.error("Discord webhook failed HTTP %s: %s", resp.status_code, resp.text)
         return False
 
-    logger.info("Discord call summary posted")
+    logger.info("Discord notification posted username=%s", username)
     return True

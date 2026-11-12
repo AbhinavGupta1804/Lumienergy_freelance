@@ -14,6 +14,8 @@ import {
   markConversationRead,
 } from "@/lib/unread";
 import { connectAdminWs } from "@/lib/ws";
+import { useCompany } from "@/lib/company";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { ConversationList } from "./ConversationList";
 import { MessageThread } from "./MessageThread";
 
@@ -38,25 +40,38 @@ export function ChatLayout() {
   const [composeNew, setComposeNew] = useState(false);
   const [newPhone, setNewPhone] = useState("");
   const selectedPhoneRef = useRef<string | null>(null);
+  const companyRef = useRef<"energy" | "lights">("energy");
+  const isMobile = useIsMobile();
+  const { company } = useCompany();
 
   const showThreadPane = Boolean(selectedPhone || composeNew);
+  const showList = !(isMobile && showThreadPane);
+  const showThread = showThreadPane || !isMobile;
 
   useEffect(() => {
     selectedPhoneRef.current = selectedPhone;
   }, [selectedPhone]);
 
+  useEffect(() => {
+    companyRef.current = company;
+    setSelectedPhone(null);
+    setMessages([]);
+    setComposeNew(false);
+    setLeadName("");
+  }, [company]);
+
   const loadConversations = useCallback(async () => {
     setLoadingList(true);
     try {
       const reads = loadLastReadMap();
-      const data = await fetchConversations(search, reads);
+      const data = await fetchConversations(search, reads, company);
       setConversations(data.conversations);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load conversations");
     } finally {
       setLoadingList(false);
     }
-  }, [search]);
+  }, [search, company]);
 
   const loadThread = useCallback(async (phone: string) => {
     setLoadingThread(true);
@@ -97,13 +112,18 @@ export function ChatLayout() {
     return connectAdminWs((msg) => {
       const phone = customerPhoneForMessage(msg);
       if (!phone) return;
+      const viewing = companyRef.current;
+      const rowKey = msg.lead_row_key || "";
+      const isLightsMsg = rowKey.startsWith("lights_");
       const openPhone = selectedPhoneRef.current;
       const isOpen = openPhone === phone;
       const isInbound = msg.direction === "inbound";
 
       setConversations((prev) => {
-        const rest = prev.filter((c) => c.phone !== phone);
         const existing = prev.find((c) => c.phone === phone);
+        if (!existing && viewing === "lights" && !isLightsMsg) return prev;
+        if (!existing && viewing === "energy" && isLightsMsg) return prev;
+        const rest = prev.filter((c) => c.phone !== phone);
         const prevUnread = existing?.unread_count || 0;
         const updated: Conversation = {
           phone,
@@ -207,41 +227,52 @@ export function ChatLayout() {
         selectedPhone={selectedPhone}
         onSelect={handleSelect}
         onNewChat={handleStartNew}
-        mobileHidden={showThreadPane}
+        mobileHidden={!showList}
+        isMobile={isMobile}
+        emptyLabel={
+          company === "lights"
+            ? "No Lumi Lights conversations yet"
+            : "No Lumi Energy conversations yet"
+        }
       />
 
       <div
+        data-desktop-pane={showThreadPane ? undefined : true}
         className={`min-w-0 flex-1 flex-col bg-[#e5ddd5] ${
-          showThreadPane ? "flex" : "hidden md:flex"
+          showThread ? "flex" : "hidden"
         }`}
       >
         {composeNew ? (
           <div className="flex flex-1 flex-col bg-lumi-bg">
-            <div className="flex items-center gap-1 border-b border-lumi-border bg-white px-2 py-2 md:hidden">
-              <button
-                type="button"
-                onClick={handleBack}
-                aria-label="Back"
-                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg"
-              >
-                <svg
-                  width="22"
-                  height="22"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden
+            {isMobile ? (
+              <div className="flex items-center gap-1 border-b border-lumi-border bg-white px-2 py-2">
+                <button
+                  type="button"
+                  onClick={handleBack}
+                  aria-label="Back"
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg"
                 >
-                  <path d="M15 18l-6-6 6-6" />
-                </svg>
-              </button>
-              <span className="font-semibold">New message</span>
-            </div>
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+                <span className="font-semibold">New message</span>
+              </div>
+            ) : null}
             <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 sm:p-8">
-              <h2 className="hidden text-lg font-semibold md:block">New message</h2>
+              {!isMobile ? (
+                <h2 className="text-lg font-semibold">New message</h2>
+              ) : null}
               <input
                 type="tel"
                 inputMode="tel"
@@ -268,11 +299,29 @@ export function ChatLayout() {
             loading={loadingThread}
             sending={sending}
             onSend={handleSend}
-            onBack={handleBack}
+            onBack={isMobile ? handleBack : undefined}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center p-6 text-center text-lumi-muted">
-            Select a conversation or start a new message
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/80 text-lumi-blue shadow-sm">
+              <svg
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                aria-hidden
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
+            <p className="text-base font-semibold text-gray-800">
+              Select a conversation
+            </p>
+            <p className="max-w-xs text-sm text-lumi-muted">
+              Pick someone from the list, or start a new message with +
+            </p>
           </div>
         )}
         {error && (

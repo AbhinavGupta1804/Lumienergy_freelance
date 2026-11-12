@@ -34,6 +34,16 @@ def nurture_sms_task_id(row_key: str, attempt: int) -> str:
     return f"ns-{row_key}-a{attempt}"
 
 
+def appointment_reminder_task_id(
+    row_key: str, kind: str, appointment_start: str
+) -> str:
+    """One task name per appointment time so a reschedule creates a new task."""
+    import hashlib
+
+    digest = hashlib.sha256((appointment_start or "").encode()).hexdigest()[:10]
+    return f"ar{kind}-{row_key}-{digest}"
+
+
 def process_lead_task_id(row_key: str) -> str:
     return f"pl-{row_key}"
 
@@ -160,6 +170,42 @@ def schedule_nurture_sms_job(
         "scheduled": bool(name),
         "task_name": name,
         "attempt": attempt,
+    }
+
+
+def schedule_appointment_reminder_job(
+    *,
+    row_key: str,
+    kind: str,
+    appointment_start: str,
+    meet_link: str,
+    schedule_at: datetime | str,
+) -> dict[str, Any]:
+    """Schedule the 24-hour or 30-minute appointment reminder SMS."""
+    if not use_cloud_tasks():
+        logger.warning(
+            "Appointment reminder not enqueued — Cloud Tasks not configured row_key=%s kind=%s",
+            row_key,
+            kind,
+        )
+        return {"backend": "none", "scheduled": False, "kind": kind}
+
+    name = create_http_task(
+        relative_url="/internal/jobs/appointment-reminder",
+        payload={
+            "row_key": row_key,
+            "kind": kind,
+            "appointment_start": appointment_start,
+            "meet_link": meet_link or "",
+        },
+        schedule_time=schedule_at,
+        task_id=appointment_reminder_task_id(row_key, kind, appointment_start),
+    )
+    return {
+        "backend": "cloud_tasks",
+        "scheduled": bool(name),
+        "task_name": name,
+        "kind": kind,
     }
 
 

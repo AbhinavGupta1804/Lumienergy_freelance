@@ -52,7 +52,7 @@ export function MessageThread({
             type="button"
             onClick={onBack}
             aria-label="Back to conversations"
-            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg md:hidden"
+            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg"
           >
             <svg
               width="22"

@@ -187,6 +187,104 @@ class CallOrchestrator:
             zoho_lead_id=(row.get("zoho_lead_id") or ""),
         )
 
+    async def start_call_for_existing_row(self, row: dict) -> dict:
+        """
+        Place a fresh outbound call for a lead already in the CRM.
+
+        Same dial and no-answer / voicemail callback chain as a new sheet lead.
+        Does not send the form-submit welcome SMS, and does not wipe booking,
+        bill, or Zoho fields already stored on the row.
+        """
+        row_key = row.get("row_key") or ""
+        if not get_settings().voice_agent_enabled:
+            logger.info("Voice agent disabled — skipping manual dial row_key=%s", row_key)
+            return {
+                "skipped": True,
+                "success": False,
+                "reason": "voice_agent_disabled",
+                "row_key": row_key,
+            }
+
+        to_number = normalize_e164(row.get("dial_to") or row.get("phone_no") or "")
+        if not to_number or len("".join(c for c in to_number if c.isdigit())) < 10:
+            return {
+                "skipped": False,
+                "success": False,
+                "error": "This lead has no valid phone number",
+                "row_key": row_key,
+            }
+
+        from app.services.job_scheduler import cancel_pending_callback_jobs
+
+        cancel_pending_callback_jobs(
+            row_key,
+            known_attempt=int(row.get("callback_attempt") or 0) or None,
+        )
+        cancelled = self._dedup.cancel_active_callbacks_for_phone(
+            to_number, except_row_key=row_key
+        )
+        if cancelled:
+            logger.info(
+                "Manual dial cancelled %s older callback row(s) for phone %s",
+                cancelled,
+                to_number,
+            )
+
+        first_name, last_name = _name_parts(row.get("name") or "")
+        phone_no = normalize_e164(row.get("phone_no") or "") or to_number
+        address = row.get("address") or ""
+
+        try:
+            result = await self._elevenlabs.initiate_outbound_call(
+                to_number=to_number,
+                first_name=first_name,
+                last_name=last_name,
+                address=address,
+                phone_no=phone_no,
+            )
+        except ElevenLabsCallError as exc:
+            logger.error("Manual dial failed row_key=%s: %s", row_key, exc)
+            self._dedup.record_outbound_dial_failed(row_key)
+            await self._send_report_on_dial_fail(row_key)
+            return {
+                "skipped": False,
+                "success": False,
+                "error": str(exc),
+                "row_key": row_key,
+            }
+
+        call_sid = result.get("callSid") or result.get("call_sid")
+        conversation_id = result.get("conversation_id")
+        if call_sid:
+            attached = await attach_status_callback(call_sid)
+            if not attached:
+                logger.debug(
+                    "Status callback not attached for call_sid=%s (expected with ElevenLabs)",
+                    call_sid,
+                )
+
+        self._dedup.record_fresh_outbound(
+            row_key=row_key,
+            call_sid=call_sid,
+            conversation_id=conversation_id,
+            phone_no=phone_no,
+            dial_to=to_number,
+        )
+        logger.info(
+            "Manual call started row_key=%s callSid=%s conversation_id=%s",
+            row_key,
+            call_sid,
+            conversation_id,
+        )
+        return {
+            "skipped": False,
+            "success": True,
+            "row_key": row_key,
+            "call_sid": call_sid,
+            "conversation_id": conversation_id,
+            "to_number": to_number,
+        }
+
     async def _dial(
         self,
         *,

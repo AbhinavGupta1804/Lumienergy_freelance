@@ -16,6 +16,7 @@ payload.put("email",ifnull(lead.get("Email"),"").toString());
 payload.put("first_name",ifnull(lead.get("First_Name"),"").toString());
 payload.put("last_name",ifnull(lead.get("Last_Name"),"").toString());
 payload.put("address",ifnull(lead.get("Addressss"),"").toString());
+payload.put("Business_unit",ifnull(lead.get("Business_unit"),"Lumi Energy").toString());
 headers = Map();
 headers.put("Content-Type","application/json");
 headers.put("X-Zoho-Webhook-Secret",SECRET);

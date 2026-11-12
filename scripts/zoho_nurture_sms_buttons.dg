@@ -33,6 +33,7 @@ string button.start_stage2_followup(String leadId)
 	payload.put("last_name", ifnull(lead.get("Last_Name"), ""));
 	// Custom address API name in this org (four s's)
 	payload.put("address", ifnull(lead.get("Addressss"), ""));
+	payload.put("Business_unit", ifnull(lead.get("Business_unit"), "Lumi Energy").toString());
 
 	headers = Map();
 	headers.put("Content-Type", "application/json");

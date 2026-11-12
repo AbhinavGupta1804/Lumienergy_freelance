@@ -181,20 +181,19 @@ function getLeadSheet_() {
 
 /**
  * If rows were deleted and lastProcessedRow is past the sheet end,
- * clamp it so new rows near the top of the sheet still get processed.
+ * clamp it to the current last row. Equal means that row was already sent.
  */
 function syncLastProcessedRow_(props, lastRow) {
   var lastProcessed = parseInt(props.getProperty('lastProcessedRow') || '1', 10);
   if (!isFinite(lastProcessed) || lastProcessed < 1) {
     lastProcessed = 1;
   }
-  if (lastRow > 1 && lastProcessed >= lastRow) {
-    var resetTo = Math.max(lastRow - 1, 1);
+  if (lastRow > 1 && lastProcessed > lastRow) {
     Logger.log(
       'lastProcessedRow (' + lastProcessed + ') is past sheet lastRow (' + lastRow +
-      ') — resetting to ' + resetTo
+      ') — resetting to ' + lastRow
     );
-    lastProcessed = resetTo;
+    lastProcessed = lastRow;
     props.setProperty('lastProcessedRow', String(lastProcessed));
   }
   return lastProcessed;

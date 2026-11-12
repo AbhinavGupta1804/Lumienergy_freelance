@@ -15,7 +15,7 @@ from app.utils.phone import normalize_e164
 
 logger = logging.getLogger(__name__)
 
-_CALL_COLUMNS = (
+_CALL_COLUMNS_BASE = (
     "row_key, row_number, name, address, email, phone_no, dial_to, "
     "call_sid, conversation_id, status, processed_at, "
     "sms_eligible, sms_sent, upload_token_used, confirmation_sms_sent, "
@@ -26,7 +26,13 @@ _CALL_COLUMNS = (
     "first_call_at, callback_attempt, next_retry_at, callback_status, "
     "call_in_progress, last_twilio_status, "
     "offer_page, monthly_bill, report_sent, report_email_type, self_booked, "
-    "followup_email_status, followup_email_attempt, next_followup_email_at"
+    "followup_email_status, followup_email_attempt, next_followup_email_at, "
+    "zoho_lead_id, business_unit"
+)
+_CALL_COLUMNS = (
+    _CALL_COLUMNS_BASE
+    + ", streetview_storage_path, streetview_fetched_at"
+    + ", streetview_render_path, streetview_render_fetched_at"
 )
 
 _BILL_COLUMNS = (
@@ -38,6 +44,16 @@ _MESSAGE_COLUMNS = (
     "id, direction, channel, message_type, body, from_address, to_address, "
     "lead_row_key, lead_name, call_sid, conversation_id, provider_id, status, created_at"
 )
+
+def lead_is_lights(row: dict[str, Any]) -> bool:
+    """Lights when Business unit says so, otherwise when the row key is lights_."""
+    unit = (row.get("business_unit") or "").strip().lower().replace("-", " ").replace("_", " ")
+    if "light" in unit:
+        return True
+    if "energy" in unit or "solar" in unit:
+        return False
+    return str(row.get("row_key") or "").startswith("lights_")
+
 
 PIPELINE_STAGES = (
     "new",
@@ -76,6 +92,24 @@ class AdminService:
             settings.supabase_service_role_key,
         )
         self._bucket = settings.bill_upload_bucket
+        self._streetview_columns = True
+
+    def _lead_query(self, build):
+        """Run a processed_leads select. Falls back if the Street View columns are not migrated yet."""
+        columns = _CALL_COLUMNS if self._streetview_columns else _CALL_COLUMNS_BASE
+        try:
+            return build(self._client.table("processed_leads").select(columns)).execute()
+        except Exception as exc:
+            if self._streetview_columns and "streetview" in str(exc).lower():
+                logger.warning(
+                    "Street View columns missing on processed_leads. "
+                    "Run supabase/migrations/009_streetview.sql"
+                )
+                self._streetview_columns = False
+                return build(
+                    self._client.table("processed_leads").select(_CALL_COLUMNS_BASE)
+                ).execute()
+            raise
 
     def list_calls(
         self,
@@ -83,13 +117,10 @@ class AdminService:
         q: str = "",
         filter_by: str = "all",
         limit: int = 500,
+        company: str = "",
     ) -> list[dict[str, Any]]:
-        resp = (
-            self._client.table("processed_leads")
-            .select(_CALL_COLUMNS)
-            .order("processed_at", desc=True)
-            .limit(limit)
-            .execute()
+        resp = self._lead_query(
+            lambda query: query.order("processed_at", desc=True).limit(limit)
         )
         calls = resp.data or []
 
@@ -117,6 +148,11 @@ class AdminService:
             if query and not self._matches_query(enriched, query):
                 continue
             if not self._matches_filter(enriched, filter_by):
+                continue
+            is_lights = lead_is_lights(enriched)
+            if company == "lights" and not is_lights:
+                continue
+            if company == "energy" and is_lights:
                 continue
 
             rows.append(enriched)
@@ -195,12 +231,34 @@ class AdminService:
             message.get("to_address") or ""
         ).strip()
 
+    def _lights_phone_keys(self) -> set[str]:
+        resp = (
+            self._client.table("processed_leads")
+            .select("phone_no,dial_to")
+            .like("row_key", "lights_%")
+            .limit(5000)
+            .execute()
+        )
+        keys: set[str] = set()
+        for row in resp.data or []:
+            for raw in (row.get("phone_no"), row.get("dial_to")):
+                text = (raw or "").strip()
+                if not text:
+                    continue
+                norm = normalize_e164(text) or text
+                keys.add(norm)
+                digits = "".join(c for c in text if c.isdigit())
+                if len(digits) >= 10:
+                    keys.add(digits[-10:])
+        return keys
+
     def list_conversations(
         self,
         *,
         q: str = "",
         limit: int = 200,
         last_read_by_phone: dict[str, str] | None = None,
+        company: str = "",
     ) -> list[dict[str, Any]]:
         """SMS threads grouped by customer phone (sidebar).
 
@@ -211,6 +269,7 @@ class AdminService:
         messages = self.list_messages(channel="sms", limit=5000)
         by_phone: dict[str, dict[str, Any]] = {}
         reads = last_read_by_phone or {}
+        lights_phones = self._lights_phone_keys() if company in {"lights", "energy"} else set()
 
         # messages are newest-first from list_messages
         for msg in messages:
@@ -230,6 +289,8 @@ class AdminService:
                     "last_direction": direction,
                     "unread_count": 0,
                     "_trail_unread": True,
+                    "has_lights": False,
+                    "has_energy": False,
                 }
                 existing = by_phone[phone]
             else:
@@ -240,6 +301,12 @@ class AdminService:
                 name = (msg.get("lead_name") or "").strip()
                 if name and not existing.get("lead_name"):
                     existing["lead_name"] = name
+
+            row_key = (msg.get("lead_row_key") or "").strip()
+            if row_key.startswith("lights_"):
+                existing["has_lights"] = True
+            elif row_key:
+                existing["has_energy"] = True
 
             last_read = (reads.get(phone) or "").strip()
             if last_read:
@@ -259,6 +326,24 @@ class AdminService:
         for row in rows:
             row.pop("_trail_unread", None)
             row["unread_count"] = int(row.get("unread_count") or 0)
+            phone = row.get("phone") or ""
+            digits = "".join(c for c in phone if c.isdigit())
+            last10 = digits[-10:] if len(digits) >= 10 else ""
+            if phone in lights_phones or (last10 and last10 in lights_phones):
+                row["has_lights"] = True
+            has_lights = bool(row.pop("has_lights", False))
+            has_energy = bool(row.pop("has_energy", False))
+            if not has_lights and not has_energy:
+                has_energy = True
+            row["_keep_lights"] = has_lights
+            row["_keep_energy"] = has_energy or not has_lights
+        if company == "lights":
+            rows = [r for r in rows if r.get("_keep_lights")]
+        elif company == "energy":
+            rows = [r for r in rows if r.get("_keep_energy")]
+        for row in rows:
+            row.pop("_keep_lights", None)
+            row.pop("_keep_energy", None)
         if q.strip():
             needle = q.strip().lower()
             rows = [
@@ -295,12 +380,8 @@ class AdminService:
         return resp.data or []
 
     def get_call(self, row_key: str) -> dict[str, Any] | None:
-        resp = (
-            self._client.table("processed_leads")
-            .select(_CALL_COLUMNS)
-            .eq("row_key", row_key)
-            .maybe_single()
-            .execute()
+        resp = self._lead_query(
+            lambda query: query.eq("row_key", row_key).maybe_single()
         )
         if not resp.data:
             return None
@@ -316,6 +397,47 @@ class AdminService:
         return self._enrich_lead(
             {**resp.data, "bills": bills, "bill_count": len(bills)}
         )
+
+    def list_sales_leads(
+        self,
+        *,
+        q: str = "",
+        limit: int = 500,
+        zoho_only: bool = False,
+        company: str = "",
+    ) -> list[dict[str, Any]]:
+        """Compact lead list for the Sales close form.
+
+        company=lights keeps Lumi Lights rows. company=energy keeps the rest.
+        """
+        rows = self.list_calls(q=q, filter_by="all", limit=limit)
+        company_filter = (company or "").strip().lower()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            zid = (row.get("zoho_lead_id") or "").strip()
+            if zoho_only and not zid:
+                continue
+            is_lights = lead_is_lights(row)
+            if company_filter == "lights" and not is_lights:
+                continue
+            if company_filter == "energy" and is_lights:
+                continue
+            out.append(
+                {
+                    "row_key": row.get("row_key"),
+                    "name": row.get("name") or "",
+                    "email": row.get("email") or "",
+                    "phone_no": row.get("phone_no") or "",
+                    "dial_to": row.get("dial_to") or "",
+                    "offer_page": row.get("offer_page") or "",
+                    "zoho_lead_id": zid,
+                    "has_zoho": bool(zid),
+                    "pipeline_label": row.get("pipeline_label") or "",
+                    "processed_at": row.get("processed_at"),
+                    "business_unit": row.get("business_unit") or "",
+                }
+            )
+        return out
 
     def get_lead_timeline(self, row_key: str) -> list[dict[str, Any]]:
         """Merged activity timeline for one lead."""
@@ -516,6 +638,8 @@ class AdminService:
             "pipeline_stage": stage,
             "pipeline_label": cls.stage_label(stage),
             "next_action": cls.compute_next_action(row),
+            "has_streetview": bool((row.get("streetview_storage_path") or "").strip()),
+            "has_lighting_preview": bool((row.get("streetview_render_path") or "").strip()),
         }
 
     @staticmethod

@@ -12,7 +12,11 @@ import {
   fetchCall,
   fetchCalls,
   fetchLeadTimeline,
+  isLightsLead,
 } from "@/lib/api";
+import { useIsMobile } from "@/lib/useIsMobile";
+import { useCompany } from "@/lib/company";
+import { LightsLeadsView } from "@/components/LightsLeadsView";
 
 const STAGE_CHIPS: { id: string; label: string }[] = [
   { id: "all", label: "All" },
@@ -208,7 +212,7 @@ function followupEmailSummary(row: CallRow) {
   };
 }
 
-export function CallsView() {
+function EnergyCallsView() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [counts, setCounts] = useState<StageCounts>({});
   const [search, setSearch] = useState("");
@@ -221,12 +225,13 @@ export function CallsView() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewType, setPreviewType] = useState("");
   const [cancelBusy, setCancelBusy] = useState<"calls" | "emails" | null>(null);
+  const isMobile = useIsMobile(1024);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchCalls(search, filter);
-      setCalls(data.calls);
+      const data = await fetchCalls(search, filter, "energy");
+      setCalls(data.calls.filter((row) => !isLightsLead(row)));
       setCounts(data.stage_counts || {});
       setError("");
     } catch (e) {
@@ -316,8 +321,12 @@ export function CallsView() {
   return (
     <div className="flex h-full">
       <section
-        className={`flex w-full flex-col border-r border-lumi-border bg-white lg:w-[58%] ${
-          showDetail ? "hidden lg:flex" : "flex"
+        className={`flex flex-col border-r border-lumi-border bg-white ${
+          isMobile
+            ? showDetail
+              ? "hidden"
+              : "flex w-full"
+            : "flex w-[58%]"
         }`}
       >
         <div className="space-y-3 border-b border-lumi-border p-3">
@@ -337,7 +346,13 @@ export function CallsView() {
               Refresh
             </button>
           </div>
-          <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex-wrap lg:overflow-visible">
+          <div
+            className={`-mx-3 flex gap-1.5 px-3 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+              isMobile
+                ? "overflow-x-auto"
+                : "flex-wrap overflow-visible"
+            }`}
+          >
             {STAGE_CHIPS.map((chip) => {
               const count = chip.id === "all" ? counts.all : counts[chip.id];
               const active = filter === chip.id;
@@ -365,7 +380,11 @@ export function CallsView() {
         </div>
 
         {/* Mobile card list */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:hidden">
+        <div
+          className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${
+            isMobile ? "block" : "hidden"
+          }`}
+        >
           {loading ? (
             <p className="p-4 text-center text-sm text-lumi-muted">Loading…</p>
           ) : calls.length === 0 ? (
@@ -409,7 +428,11 @@ export function CallsView() {
         </div>
 
         {/* Desktop table */}
-        <div className="hidden min-h-0 flex-1 overflow-auto lg:block">
+        <div
+          className={`min-h-0 flex-1 overflow-auto ${
+            isMobile ? "hidden" : "block"
+          }`}
+        >
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 bg-gray-50 text-xs text-lumi-muted">
               <tr>
@@ -492,37 +515,40 @@ export function CallsView() {
       </section>
 
       <section
+        data-desktop-pane={showDetail ? undefined : true}
         className={`min-w-0 flex-1 overflow-auto overscroll-contain bg-white ${
-          showDetail ? "flex flex-col" : "hidden lg:block"
+          showDetail ? "flex flex-col" : isMobile ? "hidden" : "block"
         }`}
       >
         {!detail ? (
-          <p className="hidden p-6 text-lumi-muted lg:block">
+          <p className={`p-6 text-lumi-muted ${isMobile ? "hidden" : "block"}`}>
             Select a lead to view journey
           </p>
         ) : (
           <div className="p-4 sm:p-6">
             <div className="mb-4 flex items-start gap-2">
-              <button
-                type="button"
-                onClick={clearSelection}
-                aria-label="Back to leads"
-                className="mr-1 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg lg:hidden"
-              >
-                <svg
-                  width="22"
-                  height="22"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden
+              {isMobile ? (
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  aria-label="Back to leads"
+                  className="mr-1 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lumi-blue hover:bg-lumi-bg"
                 >
-                  <path d="M15 18l-6-6 6-6" />
-                </svg>
-              </button>
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+              ) : null}
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -624,6 +650,14 @@ export function CallsView() {
                     : detail.followup_email_status === "cancelled"
                       ? "Follow-up emails cancelled"
                       : "No pending follow-up emails"}
+              </button>
+              <button
+                type="button"
+                disabled
+                title="Calling is turned off"
+                className="min-h-[44px] rounded-lg bg-lumi-blue px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Call now
               </button>
             </div>
 
@@ -822,8 +856,8 @@ export function CallsView() {
                 <Field label="Cal booking" value={detail.cal_booking_uid} mono />
               </FieldGrid>
             </DetailSection>
-            {error ? (
-              <p className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700 lg:hidden">
+            {error && isMobile ? (
+              <p className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700">
                 {error}
               </p>
             ) : null}
@@ -832,6 +866,15 @@ export function CallsView() {
       </section>
     </div>
   );
+}
+
+export function CallsView() {
+  const { company, ready } = useCompany();
+  if (!ready) {
+    return <p className="p-6 text-sm text-lumi-muted">Loading…</p>;
+  }
+  if (company === "lights") return <LightsLeadsView />;
+  return <EnergyCallsView />;
 }
 
 function DetailSection({

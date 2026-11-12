@@ -16,6 +16,16 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+# Sheet ingest writes status "received". The dial job then sets "queued"
+# so a second webhook does not start another call. Anything else means a
+# dial was already attempted (called, failed, skipped, …).
+_AWAITING_DIAL_STATUSES = frozenset({"received", "queued"})
+
+
+def _dial_already_finished(status: str | None) -> bool:
+    return (status or "").strip().lower() not in _AWAITING_DIAL_STATUSES
+
+
 def _normalize_zoho_id(zoho_lead_id: str) -> str:
     zid = (zoho_lead_id or "").strip()
     if zid.lower().startswith("zoho-"):
@@ -40,12 +50,13 @@ _PROCESSED_LEADS_COLUMNS = (
     "offer_page, monthly_bill, report_sent, report_email_type, self_booked, "
     "followup_email_status, followup_email_attempt, next_followup_email_at, "
     "nurture_sms_status, nurture_sms_attempt, next_nurture_sms_at, sms_opt_out, "
-    "zoho_lead_id"
+    "zoho_lead_id, business_unit"
 )
 
 
 class _DedupBackend(Protocol):
     def is_processed(self, row_key: str) -> bool: ...
+    def claim_outbound_dial(self, row_key: str) -> bool: ...
     def mark_processed(self, **kwargs: Any) -> None: ...
     def get_by_call_sid(self, call_sid: str) -> dict | None: ...
     def get_by_conversation_id(self, conversation_id: str) -> dict | None: ...
@@ -83,6 +94,16 @@ class _DedupBackend(Protocol):
         call_sid: str,
         conversation_id: str | None,
     ) -> None: ...
+    def record_fresh_outbound(
+        self,
+        *,
+        row_key: str,
+        call_sid: str | None,
+        conversation_id: str | None,
+        phone_no: str,
+        dial_to: str,
+    ) -> None: ...
+    def record_outbound_dial_failed(self, row_key: str) -> None: ...
     def update_callback_outcome(
         self,
         *,
@@ -131,6 +152,8 @@ class _DedupBackend(Protocol):
     def bind_zoho_lead_id(self, **kwargs: Any) -> dict: ...
     def upsert_lead_from_sheet(self, **kwargs: Any) -> dict: ...
     def ensure_lead_for_nurture(self, **kwargs: Any) -> dict: ...
+    def find_prefixed_lead(self, **kwargs: Any) -> dict | None: ...
+    def set_transactional_sms_consent(self, row_key: str) -> None: ...
     def schedule_nurture_sms(self, *, row_key: str, next_at_iso: str) -> bool: ...
     def claim_nurture_sms(self, row_key: str) -> bool: ...
     def update_nurture_sms_state(
@@ -142,8 +165,23 @@ class _DedupBackend(Protocol):
         next_at_iso: str | None,
     ) -> None: ...
     def cancel_nurture_sms(self, *, row_key: str, status: str = "cancelled") -> bool: ...
+    def set_business_unit(self, *, row_key: str, business_unit: str) -> dict | None: ...
+    def set_appointment_details(
+        self,
+        *,
+        row_key: str,
+        appointment_start: str,
+        appointment_label: str = "",
+        cal_booking_uid: str = "",
+    ) -> dict | None: ...
     def set_sms_opt_out(self, *, phone: str) -> int: ...
     def is_sms_opted_out(self, phone: str) -> bool: ...
+    def set_streetview(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None: ...
+    def set_streetview_render(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None: ...
 
 
 def _row_to_dict(row: Any) -> dict:
@@ -234,6 +272,11 @@ class SqliteDedupBackend:
             "next_nurture_sms_at": "TEXT",
             "sms_opt_out": "INTEGER NOT NULL DEFAULT 0",
             "zoho_lead_id": "TEXT",
+            "business_unit": "TEXT",
+            "streetview_storage_path": "TEXT",
+            "streetview_fetched_at": "TEXT",
+            "streetview_render_path": "TEXT",
+            "streetview_render_fetched_at": "TEXT",
         }
         for col, typedef in additions.items():
             if col not in existing:
@@ -242,10 +285,26 @@ class SqliteDedupBackend:
     def is_processed(self, row_key: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM processed_leads WHERE row_key = ?",
+                "SELECT status FROM processed_leads WHERE row_key = ?",
                 (row_key,),
             ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        return _dial_already_finished(row[0])
+
+    def claim_outbound_dial(self, row_key: str) -> bool:
+        """Move a freshly saved lead from received → queued. False if already claimed."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE processed_leads
+                SET status = 'queued'
+                WHERE row_key = ? AND lower(status) = 'received'
+                """,
+                (row_key,),
+            )
+            conn.commit()
+            return cur.rowcount == 1
 
     def mark_processed(
         self,
@@ -645,6 +704,48 @@ class SqliteDedupBackend:
             )
             conn.commit()
 
+    def record_fresh_outbound(
+        self,
+        *,
+        row_key: str,
+        call_sid: str | None,
+        conversation_id: str | None,
+        phone_no: str,
+        dial_to: str,
+    ) -> None:
+        """Start a new callback chain on an existing lead without wiping CRM fields."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET call_sid = ?, conversation_id = ?, phone_no = ?, dial_to = ?,
+                    status = 'called', processed_at = ?, first_call_at = ?,
+                    call_in_progress = 1, next_retry_at = NULL,
+                    callback_status = 'active', callback_attempt = 0,
+                    last_twilio_status = NULL, sms_sent = 0,
+                    call_ended_at = NULL, call_duration_secs = NULL,
+                    call_successful = NULL, transcript_summary = NULL,
+                    termination_reason = NULL
+                WHERE row_key = ?
+                """,
+                (call_sid, conversation_id, phone_no, dial_to, now, now, row_key),
+            )
+            conn.commit()
+
+    def record_outbound_dial_failed(self, row_key: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET status = 'failed', call_in_progress = 0,
+                    callback_status = 'none', next_retry_at = NULL
+                WHERE row_key = ?
+                """,
+                (row_key,),
+            )
+            conn.commit()
+
     def update_callback_outcome(
         self,
         *,
@@ -967,6 +1068,70 @@ class SqliteDedupBackend:
             ).fetchone()
         return _row_to_dict(row) if row else None
 
+    def find_prefixed_lead(
+        self,
+        *,
+        prefix: str,
+        phone: str = "",
+        email: str = "",
+        zoho_lead_id: str = "",
+    ) -> dict | None:
+        """First lead whose row_key starts with prefix, matched by Zoho id, phone, or email."""
+        prefix = (prefix or "").strip()
+        if not prefix:
+            return None
+        zid = _normalize_zoho_id(zoho_lead_id)
+        if zid:
+            row = self.find_lead_by_zoho_id(zid)
+            if row and str(row.get("row_key") or "").startswith(prefix):
+                return row
+        last10 = _phone_last10(phone)
+        like = f"{prefix}%"
+        with self._connect() as conn:
+            if last10:
+                row = conn.execute(
+                    f"""
+                    SELECT {_PROCESSED_LEADS_COLUMNS}
+                    FROM processed_leads
+                    WHERE row_key LIKE ?
+                      AND (
+                        substr(REPLACE(REPLACE(REPLACE(COALESCE(phone_no,''), '+', ''), ' ', ''), '-', ''), -10) = ?
+                        OR substr(REPLACE(REPLACE(REPLACE(COALESCE(dial_to,''), '+', ''), ' ', ''), '-', ''), -10) = ?
+                      )
+                    ORDER BY processed_at DESC
+                    LIMIT 1
+                    """,
+                    (like, last10, last10),
+                ).fetchone()
+                if row:
+                    return _row_to_dict(row)
+            email_l = (email or "").strip().lower()
+            if email_l:
+                row = conn.execute(
+                    f"""
+                    SELECT {_PROCESSED_LEADS_COLUMNS}
+                    FROM processed_leads
+                    WHERE row_key LIKE ?
+                      AND lower(email) = ?
+                    ORDER BY processed_at DESC
+                    LIMIT 1
+                    """,
+                    (like, email_l),
+                ).fetchone()
+                if row:
+                    return _row_to_dict(row)
+        return None
+
+    def set_transactional_sms_consent(self, row_key: str) -> None:
+        if not (row_key or "").strip():
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE processed_leads SET sms_eligible = 1 WHERE row_key = ?",
+                (row_key,),
+            )
+            conn.commit()
+
     def find_lead_with_zoho_by_phone(self, phone: str) -> dict | None:
         last10 = _phone_last10(phone)
         if not last10:
@@ -1206,30 +1371,41 @@ class SqliteDedupBackend:
         name: str = "",
         zoho_lead_id: str = "",
         address: str = "",
+        force_row_key: str = "",
     ) -> dict:
         zid = _normalize_zoho_id(zoho_lead_id)
-        existing = None
-        if zid:
-            existing = self.find_lead_by_zoho_id(zid)
-        if not existing and phone:
-            existing = self.find_lead_by_phone(phone)
-        if not existing and email:
-            existing = self.find_lead_by_email(email)
-        if existing:
-            if zid and (existing.get("zoho_lead_id") or "") != zid:
-                self._set_zoho_lead_id(row_key=existing["row_key"], zoho_lead_id=zid)
-                existing = self.get_by_row_key(existing["row_key"]) or existing
-                existing = dict(existing)
-                existing["zoho_lead_id"] = zid
-            return existing
-
-        digits = "".join(c for c in (phone or "") if c.isdigit())
-        row_key = f"zoho-{zid}" if zid else f"nurture-{digits or 'unknown'}"
-        found = self.get_by_row_key(row_key)
-        if found:
+        forced = (force_row_key or "").strip()
+        if forced:
+            found = self.get_by_row_key(forced)
+            if found:
+                if zid and (found.get("zoho_lead_id") or "") != zid:
+                    self._set_zoho_lead_id(row_key=forced, zoho_lead_id=zid)
+                    found = self.get_by_row_key(forced) or found
+                return found
+            row_key = forced
+        else:
+            existing = None
             if zid:
-                self._set_zoho_lead_id(row_key=row_key, zoho_lead_id=zid)
-            return self.get_by_row_key(row_key) or found
+                existing = self.find_lead_by_zoho_id(zid)
+            if not existing and phone:
+                existing = self.find_lead_by_phone(phone)
+            if not existing and email:
+                existing = self.find_lead_by_email(email)
+            if existing:
+                if zid and (existing.get("zoho_lead_id") or "") != zid:
+                    self._set_zoho_lead_id(row_key=existing["row_key"], zoho_lead_id=zid)
+                    existing = self.get_by_row_key(existing["row_key"]) or existing
+                    existing = dict(existing)
+                    existing["zoho_lead_id"] = zid
+                return existing
+
+            digits = "".join(c for c in (phone or "") if c.isdigit())
+            row_key = f"zoho-{zid}" if zid else f"nurture-{digits or 'unknown'}"
+            found = self.get_by_row_key(row_key)
+            if found:
+                if zid:
+                    self._set_zoho_lead_id(row_key=row_key, zoho_lead_id=zid)
+                return self.get_by_row_key(row_key) or found
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
@@ -1319,6 +1495,78 @@ class SqliteDedupBackend:
             conn.commit()
             return cur.rowcount > 0
 
+    def set_business_unit(self, *, row_key: str, business_unit: str) -> dict | None:
+        key = (row_key or "").strip()
+        unit = (business_unit or "").strip()
+        if not key or not unit:
+            return self.get_by_row_key(key) if key else None
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE processed_leads SET business_unit = ? WHERE row_key = ?",
+                (unit, key),
+            )
+            conn.commit()
+        return self.get_by_row_key(key)
+
+    def set_streetview(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET streetview_storage_path = ?,
+                    streetview_fetched_at = ?
+                WHERE row_key = ?
+                """,
+                (storage_path, fetched_at, row_key),
+            )
+            conn.commit()
+
+    def set_streetview_render(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE processed_leads
+                SET streetview_render_path = ?,
+                    streetview_render_fetched_at = ?
+                WHERE row_key = ?
+                """,
+                (storage_path, fetched_at, row_key),
+            )
+            conn.commit()
+
+    def set_appointment_details(
+        self,
+        *,
+        row_key: str,
+        appointment_start: str,
+        appointment_label: str = "",
+        cal_booking_uid: str = "",
+    ) -> dict | None:
+        key = (row_key or "").strip()
+        if not key:
+            return None
+        sets = ["appointment_start = ?", "appointment_label = ?"]
+        params: list[Any] = [
+            (appointment_start or "").strip() or None,
+            (appointment_label or "").strip() or None,
+        ]
+        uid = (cal_booking_uid or "").strip()
+        if uid:
+            sets.append("cal_booking_uid = ?")
+            params.append(uid)
+        params.append(key)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE processed_leads SET {', '.join(sets)} WHERE row_key = ?",
+                tuple(params),
+            )
+            conn.commit()
+        return self.get_by_row_key(key)
+
     def set_sms_opt_out(self, *, phone: str) -> int:
         digits = "".join(c for c in (phone or "") if c.isdigit())
         if not digits:
@@ -1361,7 +1609,7 @@ class SqliteDedupBackend:
                 """,
                 (digits, digits),
             ).fetchone()
-        return row is not None
+            return row is not None
 
 
 def _pg_eq_value(value: str) -> str:
@@ -1386,7 +1634,19 @@ class SupabaseDedupBackend:
         return f"dial_to.eq.{q},phone_no.eq.{q}"
 
     def is_processed(self, row_key: str) -> bool:
-        resp = self._table.select("row_key").eq("row_key", row_key).limit(1).execute()
+        resp = self._table.select("status").eq("row_key", row_key).limit(1).execute()
+        if not resp.data:
+            return False
+        return _dial_already_finished(resp.data[0].get("status"))
+
+    def claim_outbound_dial(self, row_key: str) -> bool:
+        """Move a freshly saved lead from received → queued. False if already claimed."""
+        resp = (
+            self._table.update({"status": "queued"})
+            .eq("row_key", row_key)
+            .eq("status", "received")
+            .execute()
+        )
         return bool(resp.data)
 
     def mark_processed(
@@ -1706,6 +1966,50 @@ class SupabaseDedupBackend:
             }
         ).eq("row_key", row_key).execute()
 
+    def record_fresh_outbound(
+        self,
+        *,
+        row_key: str,
+        call_sid: str | None,
+        conversation_id: str | None,
+        phone_no: str,
+        dial_to: str,
+    ) -> None:
+        """Start a new callback chain on an existing lead without wiping CRM fields."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._table.update(
+            {
+                "call_sid": call_sid,
+                "conversation_id": conversation_id,
+                "phone_no": phone_no,
+                "dial_to": dial_to,
+                "status": "called",
+                "processed_at": now,
+                "first_call_at": now,
+                "call_in_progress": True,
+                "next_retry_at": None,
+                "callback_status": "active",
+                "callback_attempt": 0,
+                "last_twilio_status": None,
+                "sms_sent": False,
+                "call_ended_at": None,
+                "call_duration_secs": None,
+                "call_successful": None,
+                "transcript_summary": None,
+                "termination_reason": None,
+            }
+        ).eq("row_key", row_key).execute()
+
+    def record_outbound_dial_failed(self, row_key: str) -> None:
+        self._table.update(
+            {
+                "status": "failed",
+                "call_in_progress": False,
+                "callback_status": "none",
+                "next_retry_at": None,
+            }
+        ).eq("row_key", row_key).execute()
+
     def update_callback_outcome(
         self,
         *,
@@ -1984,6 +2288,50 @@ class SupabaseDedupBackend:
         rows = self._find_lead_rows_by_phone_loose(phone)
         return rows[0] if rows else None
 
+    def find_prefixed_lead(
+        self,
+        *,
+        prefix: str,
+        phone: str = "",
+        email: str = "",
+        zoho_lead_id: str = "",
+    ) -> dict | None:
+        prefix = (prefix or "").strip()
+        if not prefix:
+            return None
+        resp = (
+            self._table.select(_PROCESSED_LEADS_COLUMNS)
+            .like("row_key", f"{prefix}%")
+            .limit(2000)
+            .execute()
+        )
+        rows = resp.data or []
+        zid = _normalize_zoho_id(zoho_lead_id)
+        last10 = _phone_last10(phone)
+        email_l = (email or "").strip().lower()
+
+        def rank(row: dict) -> int:
+            if zid and (row.get("zoho_lead_id") or "") == zid:
+                return 0
+            if last10 and (
+                _phone_last10(row.get("phone_no") or "") == last10
+                or _phone_last10(row.get("dial_to") or "") == last10
+            ):
+                return 1
+            if email_l and (row.get("email") or "").strip().lower() == email_l:
+                return 2
+            return 9
+
+        matches = [row for row in rows if rank(row) < 9]
+        matches.sort(key=lambda row: row.get("processed_at") or "", reverse=True)
+        matches.sort(key=rank)
+        return matches[0] if matches else None
+
+    def set_transactional_sms_consent(self, row_key: str) -> None:
+        if not (row_key or "").strip():
+            return
+        self._table.update({"sms_eligible": True}).eq("row_key", row_key).execute()
+
     def find_lead_with_zoho_by_phone(self, phone: str) -> dict | None:
         for row in self._find_lead_rows_by_phone_loose(phone):
             zid = (row.get("zoho_lead_id") or "").strip()
@@ -2170,30 +2518,41 @@ class SupabaseDedupBackend:
         name: str = "",
         zoho_lead_id: str = "",
         address: str = "",
+        force_row_key: str = "",
     ) -> dict:
         zid = _normalize_zoho_id(zoho_lead_id)
-        existing = None
-        if zid:
-            existing = self.find_lead_by_zoho_id(zid)
-        if not existing and phone:
-            existing = self.find_lead_by_phone(phone)
-        if not existing and email:
-            existing = self.find_lead_by_email(email)
-        if existing:
-            if zid and (existing.get("zoho_lead_id") or "") != zid:
-                self._set_zoho_lead_id(row_key=existing["row_key"], zoho_lead_id=zid)
-                existing = self.get_by_row_key(existing["row_key"]) or existing
-                existing = dict(existing)
-                existing["zoho_lead_id"] = zid
-            return existing
-
-        digits = "".join(c for c in (phone or "") if c.isdigit())
-        row_key = f"zoho-{zid}" if zid else f"nurture-{digits or 'unknown'}"
-        found = self.get_by_row_key(row_key)
-        if found:
+        forced = (force_row_key or "").strip()
+        if forced:
+            found = self.get_by_row_key(forced)
+            if found:
+                if zid and (found.get("zoho_lead_id") or "") != zid:
+                    self._set_zoho_lead_id(row_key=forced, zoho_lead_id=zid)
+                    found = self.get_by_row_key(forced) or found
+                return found
+            row_key = forced
+        else:
+            existing = None
             if zid:
-                self._set_zoho_lead_id(row_key=row_key, zoho_lead_id=zid)
-            return self.get_by_row_key(row_key) or found
+                existing = self.find_lead_by_zoho_id(zid)
+            if not existing and phone:
+                existing = self.find_lead_by_phone(phone)
+            if not existing and email:
+                existing = self.find_lead_by_email(email)
+            if existing:
+                if zid and (existing.get("zoho_lead_id") or "") != zid:
+                    self._set_zoho_lead_id(row_key=existing["row_key"], zoho_lead_id=zid)
+                    existing = self.get_by_row_key(existing["row_key"]) or existing
+                    existing = dict(existing)
+                    existing["zoho_lead_id"] = zid
+                return existing
+
+            digits = "".join(c for c in (phone or "") if c.isdigit())
+            row_key = f"zoho-{zid}" if zid else f"nurture-{digits or 'unknown'}"
+            found = self.get_by_row_key(row_key)
+            if found:
+                if zid:
+                    self._set_zoho_lead_id(row_key=row_key, zoho_lead_id=zid)
+                return self.get_by_row_key(row_key) or found
         now = datetime.now(timezone.utc).isoformat()
         payload = {
             "row_key": row_key,
@@ -2263,6 +2622,51 @@ class SupabaseDedupBackend:
         )
         return bool(resp.data)
 
+    def set_business_unit(self, *, row_key: str, business_unit: str) -> dict | None:
+        key = (row_key or "").strip()
+        unit = (business_unit or "").strip()
+        if not key or not unit:
+            return self.get_by_row_key(key) if key else None
+        self._table.update({"business_unit": unit}).eq("row_key", key).execute()
+        return self.get_by_row_key(key)
+
+    def set_streetview(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None:
+        self._table.update({
+            "streetview_storage_path": storage_path,
+            "streetview_fetched_at": fetched_at,
+        }).eq("row_key", row_key).execute()
+
+    def set_streetview_render(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None:
+        self._table.update({
+            "streetview_render_path": storage_path,
+            "streetview_render_fetched_at": fetched_at,
+        }).eq("row_key", row_key).execute()
+
+    def set_appointment_details(
+        self,
+        *,
+        row_key: str,
+        appointment_start: str,
+        appointment_label: str = "",
+        cal_booking_uid: str = "",
+    ) -> dict | None:
+        key = (row_key or "").strip()
+        if not key:
+            return None
+        payload: dict[str, Any] = {
+            "appointment_start": (appointment_start or "").strip() or None,
+            "appointment_label": (appointment_label or "").strip() or None,
+        }
+        uid = (cal_booking_uid or "").strip()
+        if uid:
+            payload["cal_booking_uid"] = uid
+        self._table.update(payload).eq("row_key", key).execute()
+        return self.get_by_row_key(key)
+
     def set_sms_opt_out(self, *, phone: str) -> int:
         digits = "".join(c for c in (phone or "") if c.isdigit())
         if not digits:
@@ -2327,6 +2731,9 @@ class DedupStore:
 
     def is_processed(self, row_key: str) -> bool:
         return self._impl.is_processed(row_key)
+
+    def claim_outbound_dial(self, row_key: str) -> bool:
+        return self._impl.claim_outbound_dial(row_key)
 
     def mark_processed(self, **kwargs: Any) -> None:
         self._impl.mark_processed(**kwargs)
@@ -2416,6 +2823,26 @@ class DedupStore:
             call_sid=call_sid,
             conversation_id=conversation_id,
         )
+
+    def record_fresh_outbound(
+        self,
+        *,
+        row_key: str,
+        call_sid: str | None,
+        conversation_id: str | None,
+        phone_no: str,
+        dial_to: str,
+    ) -> None:
+        self._impl.record_fresh_outbound(
+            row_key=row_key,
+            call_sid=call_sid,
+            conversation_id=conversation_id,
+            phone_no=phone_no,
+            dial_to=dial_to,
+        )
+
+    def record_outbound_dial_failed(self, row_key: str) -> None:
+        self._impl.record_outbound_dial_failed(row_key)
 
     def update_callback_outcome(
         self,
@@ -2528,6 +2955,12 @@ class DedupStore:
     def ensure_lead_for_nurture(self, **kwargs: Any) -> dict:
         return self._impl.ensure_lead_for_nurture(**kwargs)
 
+    def find_prefixed_lead(self, **kwargs: Any) -> dict | None:
+        return self._impl.find_prefixed_lead(**kwargs)
+
+    def set_transactional_sms_consent(self, row_key: str) -> None:
+        self._impl.set_transactional_sms_consent(row_key)
+
     def schedule_nurture_sms(self, *, row_key: str, next_at_iso: str) -> bool:
         return self._impl.schedule_nurture_sms(row_key=row_key, next_at_iso=next_at_iso)
 
@@ -2552,8 +2985,46 @@ class DedupStore:
     def cancel_nurture_sms(self, *, row_key: str, status: str = "cancelled") -> bool:
         return self._impl.cancel_nurture_sms(row_key=row_key, status=status)
 
+    def set_business_unit(self, *, row_key: str, business_unit: str) -> dict | None:
+        return self._impl.set_business_unit(
+            row_key=row_key, business_unit=business_unit
+        )
+
+    def set_appointment_details(
+        self,
+        *,
+        row_key: str,
+        appointment_start: str,
+        appointment_label: str = "",
+        cal_booking_uid: str = "",
+    ) -> dict | None:
+        return self._impl.set_appointment_details(
+            row_key=row_key,
+            appointment_start=appointment_start,
+            appointment_label=appointment_label,
+            cal_booking_uid=cal_booking_uid,
+        )
+
     def set_sms_opt_out(self, *, phone: str) -> int:
         return self._impl.set_sms_opt_out(phone=phone)
 
     def is_sms_opted_out(self, phone: str) -> bool:
         return self._impl.is_sms_opted_out(phone)
+
+    def set_streetview(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None:
+        self._impl.set_streetview(
+            row_key=row_key,
+            storage_path=storage_path,
+            fetched_at=fetched_at,
+        )
+
+    def set_streetview_render(
+        self, *, row_key: str, storage_path: str, fetched_at: str
+    ) -> None:
+        self._impl.set_streetview_render(
+            row_key=row_key,
+            storage_path=storage_path,
+            fetched_at=fetched_at,
+        )

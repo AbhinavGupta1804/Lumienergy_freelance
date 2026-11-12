@@ -33,6 +33,12 @@ class ZohoLeadBody(BaseModel):
     # Zoho Deluge often sends id as Int — coerce so large CRM ids stay exact as text
     zoho_lead_id: str = Field(default="", alias="id")
     row_key: str = ""
+    appointment_start: str = ""
+    sms_consent: str = ""
+    meet_link: str = ""
+    cal_booking_uid: str = ""
+    appointment_cancelled: str = ""
+    business_unit: str = Field(default="", alias="Business_unit")
 
     model_config = {"populate_by_name": True}
 
@@ -45,6 +51,12 @@ class ZohoLeadBody(BaseModel):
         "name",
         "address",
         "row_key",
+        "appointment_start",
+        "sms_consent",
+        "meet_link",
+        "cal_booking_uid",
+        "appointment_cancelled",
+        "business_unit",
         mode="before",
     )
     @classmethod
@@ -67,6 +79,10 @@ def _verify_zoho_secret(
     provided = (header_value or query_secret or "").strip()
     if provided != expected:
         raise HTTPException(status_code=401, detail="Invalid Zoho webhook secret")
+
+
+def _is_cancelled(body: ZohoLeadBody) -> bool:
+    return (body.appointment_cancelled or "").strip().lower() in {"1", "true", "yes"}
 
 
 def _display_name(body: ZohoLeadBody) -> str:
@@ -93,6 +109,7 @@ async def zoho_book_appointment(
         zoho_lead_id=body.zoho_lead_id,
         address=body.address,
         row_key=body.row_key,
+        business_unit=body.business_unit or "Lumi Energy",
     )
     if not lead:
         raise HTTPException(
@@ -100,10 +117,126 @@ async def zoho_book_appointment(
             detail="Need Zoho id, phone, email, or row_key to identify the lead",
         )
 
+    if _is_cancelled(body):
+        logger.info(
+            "Zoho book-appointment cancel ignored for reminders lead=%s",
+            lead.get("row_key"),
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "row_key": lead.get("row_key"),
+                "action": "ignored",
+                "reason": "energy_reminders_disabled",
+            }
+        )
+
     result = await nurture.on_appointment_booked(lead)
     logger.info(
-        "Zoho book-appointment lead=%s result=%s",
+        "Zoho book-appointment lead=%s business_unit=%r result=%s",
         lead.get("row_key"),
+        lead.get("business_unit"),
+        result,
+    )
+    return JSONResponse({"ok": True, "row_key": lead.get("row_key"), **result})
+
+
+@router.post("/lights/book-appointment")
+async def zoho_lights_book_appointment(
+    body: ZohoLeadBody,
+    request: Request,
+    x_zoho_webhook_secret: str | None = Header(default=None),
+    secret: str | None = Query(default=None),
+) -> JSONResponse:
+    """Lumi Lights consultation booked — stop the text sequence and send confirmation SMS."""
+    _verify_zoho_secret(x_zoho_webhook_secret, secret)
+    nurture = request.app.state.sms_nurture_service
+
+    lead = nurture.resolve_lights_lead(
+        phone=body.phone,
+        email=body.email,
+        name=_display_name(body),
+        zoho_lead_id=body.zoho_lead_id,
+        address=body.address,
+        sms_consent=body.sms_consent,
+        business_unit=body.business_unit or "Lumi Lights",
+    )
+    if not lead:
+        raise HTTPException(
+            status_code=400,
+            detail="Need Zoho id, phone, email, or row_key to identify the lead",
+        )
+    cancelled = _is_cancelled(body)
+    if not cancelled and not (body.appointment_start or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Appointment_Booked is empty",
+        )
+    if cancelled:
+        reminders = nurture.cancel_appointment_reminders(lead)
+        logger.info(
+            "Zoho Lights book-appointment cancelled lead=%s reminders=%s",
+            lead.get("row_key"),
+            reminders,
+        )
+        return JSONResponse(
+            {"ok": True, "row_key": lead.get("row_key"), "reminders": reminders}
+        )
+
+    result = await nurture.on_lights_appointment_booked(
+        lead,
+        appointment_start=body.appointment_start,
+        first_name=body.first_name,
+        sms_consent=body.sms_consent,
+        meet_link=body.meet_link,
+        cal_booking_uid=body.cal_booking_uid,
+    )
+    reminders = nurture.schedule_appointment_reminders(
+        lead,
+        appointment_start=body.appointment_start,
+        meet_link=body.meet_link,
+        cal_booking_uid=body.cal_booking_uid,
+    )
+    logger.info(
+        "Zoho Lights book-appointment lead=%s result=%s reminders=%s",
+        lead.get("row_key"),
+        result,
+        reminders,
+    )
+    return JSONResponse(
+        {"ok": True, "row_key": lead.get("row_key"), "reminders": reminders, **result}
+    )
+
+
+@router.post("/lights/activate-followup")
+async def zoho_lights_activate_followup(
+    body: ZohoLeadBody,
+    request: Request,
+    x_zoho_webhook_secret: str | None = Header(default=None),
+    secret: str | None = Query(default=None),
+) -> JSONResponse:
+    """Lumi Lights 10-touch follow-up. Does not send the Energy solar texts."""
+    _verify_zoho_secret(x_zoho_webhook_secret, secret)
+    nurture = request.app.state.sms_nurture_service
+    lead = nurture.resolve_lights_lead(
+        phone=body.phone,
+        email=body.email,
+        name=_display_name(body),
+        zoho_lead_id=body.zoho_lead_id,
+        address=body.address,
+        sms_consent=body.sms_consent,
+        business_unit=body.business_unit or "Lumi Lights",
+    )
+    if not lead:
+        raise HTTPException(
+            status_code=400,
+            detail="Need Zoho id, phone, email, or row_key to identify the lead",
+        )
+    result = await nurture.activate_stage2_followup(lead)
+    logger.info(
+        "Zoho Lights activate-followup lead=%s business_unit=%r result=%s",
+        lead.get("row_key"),
+        lead.get("business_unit"),
         result,
     )
     return JSONResponse({"ok": True, "row_key": lead.get("row_key"), **result})
@@ -126,6 +259,7 @@ async def zoho_activate_followup(
         zoho_lead_id=body.zoho_lead_id,
         address=body.address,
         row_key=body.row_key,
+        business_unit=body.business_unit or "Lumi Energy",
     )
     if not lead:
         raise HTTPException(
@@ -135,8 +269,9 @@ async def zoho_activate_followup(
 
     result = await nurture.activate_stage2_followup(lead)
     logger.info(
-        "Zoho activate-followup lead=%s result=%s",
+        "Zoho activate-followup lead=%s business_unit=%r result=%s",
         lead.get("row_key"),
+        lead.get("business_unit"),
         result,
     )
     return JSONResponse({"ok": True, "row_key": lead.get("row_key"), **result})

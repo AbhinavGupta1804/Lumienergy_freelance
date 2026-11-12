@@ -44,6 +44,7 @@ export type CallRow = {
   phone_no?: string;
   dial_to?: string;
   address?: string;
+  zoho_lead_id?: string;
   processed_at?: string;
   call_ended_at?: string;
   first_call_at?: string;
@@ -80,6 +81,11 @@ export type CallRow = {
   next_action?: string;
   bill_count?: number;
   bills?: BillRow[];
+  business_unit?: string;
+  has_streetview?: boolean;
+  streetview_fetched_at?: string | null;
+  has_lighting_preview?: boolean;
+  streetview_render_fetched_at?: string | null;
   [key: string]: unknown;
 };
 
@@ -112,8 +118,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export function fetchConversations(
   q = "",
   lastReadByPhone: Record<string, string> = {},
+  company: "energy" | "lights" = "energy",
 ) {
-  const params = new URLSearchParams({ q });
+  const params = new URLSearchParams({ q, company });
   if (Object.keys(lastReadByPhone).length > 0) {
     params.set("reads", JSON.stringify(lastReadByPhone));
   }
@@ -142,8 +149,26 @@ export function sendMessage(phone: string, body: string) {
   );
 }
 
-export function fetchCalls(q = "", filter = "all") {
+export function isLightsLead(lead: {
+  business_unit?: string;
+  row_key?: string;
+}) {
+  const unit = (lead.business_unit || "")
+    .toLowerCase()
+    .replace(/-/g, " ")
+    .replace(/_/g, " ");
+  if (unit.includes("light")) return true;
+  if (unit.includes("energy") || unit.includes("solar")) return false;
+  return (lead.row_key || "").startsWith("lights_");
+}
+
+export function fetchCalls(
+  q = "",
+  filter = "all",
+  company: "energy" | "lights" | "" = "",
+) {
   const params = new URLSearchParams({ q, filter });
+  if (company) params.set("company", company);
   return apiFetch<{
     calls: CallRow[];
     count: number;
@@ -163,6 +188,17 @@ export function fetchLeadTimeline(rowKey: string) {
   }>(`/api/admin/calls/${encodeURIComponent(rowKey)}/timeline`);
 }
 
+export function startVoiceCall(rowKey: string) {
+  return apiFetch<{
+    ok: boolean;
+    call_sid?: string;
+    to_number?: string;
+    conversation_id?: string;
+  }>(`/api/admin/calls/${encodeURIComponent(rowKey)}/start-voice-call`, {
+    method: "POST",
+  });
+}
+
 export function cancelFollowupCalls(rowKey: string) {
   return apiFetch<{ ok: boolean; cancelled: boolean; callback_status?: string }>(
     `/api/admin/calls/${encodeURIComponent(rowKey)}/cancel-followup-calls`,
@@ -180,11 +216,113 @@ export function cancelFollowupEmails(rowKey: string) {
   });
 }
 
+export function fetchLeadStreetview(rowKey: string) {
+  return apiFetch<{ ok: boolean; fetched_at?: string }>(
+    `/api/admin/calls/${encodeURIComponent(rowKey)}/streetview`,
+    { method: "POST" },
+  );
+}
+
+export const DEFAULT_IMAGE_MODEL = "gpt-image-2.5-sunburst";
+
+export const IMAGE_MODELS: { id: string; label: string }[] = [
+  { id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst" },
+  { id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare" },
+  { id: "gpt-image-2.5-sunburst-2026-09-08", label: "GPT Image 2.5 Sunburst (Sep 2026)" },
+  { id: "gpt-image-2.5-flare-2026-09-08", label: "GPT Image 2.5 Flare (Sep 2026)" },
+  { id: "gpt-image-2", label: "GPT Image 2" },
+  { id: "gpt-image-2-2026-04-21", label: "GPT Image 2 (Apr 2026)" },
+  { id: "gpt-image-1.5", label: "GPT Image 1.5" },
+  { id: "chatgpt-image-latest", label: "ChatGPT Image latest" },
+];
+
+export function fetchImageModels() {
+  return apiFetch<{ default: string; models: { id: string; label: string }[] }>(
+    "/api/admin/image-models",
+  );
+}
+
+export function renderLightingPreview(rowKey: string, extraPrompt = "", model = "") {
+  return apiFetch<{ ok: boolean; fetched_at?: string }>(
+    `/api/admin/calls/${encodeURIComponent(rowKey)}/streetview/render`,
+    {
+      method: "POST",
+      body: JSON.stringify({ extra_prompt: extraPrompt, model }),
+    },
+  );
+}
+
+export function lightingPreviewUrl(rowKey: string, version?: string | null) {
+  const params = new URLSearchParams();
+  if (version) params.set("v", version);
+  const q = params.toString();
+  return `${API_BASE}/api/admin/calls/${encodeURIComponent(rowKey)}/streetview/render${
+    q ? `?${q}` : ""
+  }`;
+}
+
+export function streetviewImageUrl(rowKey: string, version?: string | null) {
+  const params = new URLSearchParams();
+  if (version) params.set("v", version);
+  const q = params.toString();
+  return `${API_BASE}/api/admin/calls/${encodeURIComponent(rowKey)}/streetview${
+    q ? `?${q}` : ""
+  }`;
+}
+
 export function fetchBillSignedUrl(billId: number, download = false) {
   const params = download ? "?download=true" : "";
   return apiFetch<{ url: string; content_type: string; original_name: string }>(
     `/api/admin/bills/${billId}/signed-url${params}`,
   );
+}
+
+export type SalesLead = {
+  row_key: string;
+  name?: string;
+  email?: string;
+  phone_no?: string;
+  dial_to?: string;
+  offer_page?: string;
+  zoho_lead_id?: string;
+  has_zoho?: boolean;
+  pipeline_label?: string;
+  processed_at?: string;
+  business_unit?: string;
+};
+
+export function fetchSalesLeads(
+  q = "",
+  zohoOnly = false,
+  company: "energy" | "lights" = "energy",
+) {
+  const params = new URLSearchParams({ q, company });
+  if (zohoOnly) params.set("zoho_only", "true");
+  return apiFetch<{ leads: SalesLead[]; count: number }>(
+    `/api/admin/sales/leads?${params}`,
+  );
+}
+
+export function submitSalesClose(body: {
+  row_key: string;
+  note?: string;
+  note_title?: string;
+  sale_revenue?: number | null;
+  pre_sight_profit?: number | null;
+  post_inspection_profit?: number | null;
+  sale_date?: string | null;
+}) {
+  return apiFetch<{
+    ok: boolean;
+    row_key: string;
+    zoho_lead_id: string;
+    lead_name: string;
+    updated_fields: string[];
+    note_created: boolean;
+  }>("/api/admin/sales/close", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function customerPhoneForMessage(m: Message): string {

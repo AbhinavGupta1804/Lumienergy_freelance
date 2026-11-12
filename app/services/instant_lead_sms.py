@@ -35,7 +35,7 @@ class InstantLeadSmsService:
         self._store = store
         self._message_store = message_store
 
-    async def on_new_lead(self, lead: Lead) -> dict:
+    async def on_new_lead(self, lead: Lead, *, body: str | None = None) -> dict:
         settings = get_settings()
         if not settings.welcome_sms_enabled:
             return {"action": "skipped", "reason": "welcome_sms_disabled"}
@@ -62,9 +62,9 @@ class InstantLeadSmsService:
         ):
             return {"action": "skipped", "reason": "already_sent"}
 
-        body = build_welcome_sms_body()
+        text = (body or "").strip() or build_welcome_sms_body()
         try:
-            result = await send_sms(to_number=to_number, body=body)
+            result = await send_sms(to_number=to_number, body=text)
         except TwilioSmsError as exc:
             logger.error(
                 "Welcome SMS config error row=%s: %s",
@@ -79,7 +79,7 @@ class InstantLeadSmsService:
                 dedup_store=self._store,
                 channel="sms",
                 message_type="welcome",
-                body=body,
+                body=text,
                 to_address=to_number,
                 error=result.error,
                 customer_phone=to_number,
@@ -99,7 +99,7 @@ class InstantLeadSmsService:
             dedup_store=self._store,
             channel="sms",
             message_type="welcome",
-            body=body,
+            body=text,
             to_address=to_number,
             provider_id=result.message_sid,
             lead_row_key=lead.row_key,

@@ -55,6 +55,13 @@ class NurtureSmsBody(BaseModel):
     expected_attempt: int = Field(..., ge=1, le=10)
 
 
+class AppointmentReminderBody(BaseModel):
+    row_key: str = Field(..., min_length=1)
+    kind: str = Field(..., min_length=2)
+    appointment_start: str = ""
+    meet_link: str = ""
+
+
 def _verify_secret(header_value: str | None) -> None:
     settings = get_settings()
     expected = (settings.internal_jobs_secret or "").strip()
@@ -263,3 +270,35 @@ async def run_nurture_sms(
         result,
     )
     return JSONResponse({"ok": True, **result})
+
+
+@router.post("/appointment-reminder")
+async def run_appointment_reminder(
+    body: AppointmentReminderBody,
+    request: Request,
+    x_internal_jobs_secret: str | None = Header(default=None),
+) -> JSONResponse:
+    """Send the 24-hour or 30-minute appointment reminder."""
+    _verify_secret(x_internal_jobs_secret)
+
+    nurture = getattr(request.app.state, "sms_nurture_service", None)
+    if nurture is None:
+        return JSONResponse(
+            {"ok": False, "error": "sms_nurture_service_missing"},
+            status_code=503,
+        )
+
+    result = await nurture.send_appointment_reminder(
+        row_key=body.row_key,
+        kind=body.kind.strip(),
+        appointment_start=body.appointment_start,
+        meet_link=body.meet_link,
+    )
+    logger.info(
+        "Cloud Tasks appointment-reminder row_key=%s kind=%s result=%s",
+        body.row_key,
+        body.kind,
+        result,
+    )
+    status = 500 if result.get("action") == "failed" else 200
+    return JSONResponse({"ok": status == 200, **result}, status_code=status)

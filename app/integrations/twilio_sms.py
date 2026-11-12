@@ -62,7 +62,7 @@ def build_confirmation_sms_body(
 
 
 def build_welcome_sms_body() -> str:
-    """Stage 0 — instant confirmation when a lead submits the form."""
+    """Stage 0 — instant confirmation when a Lumi Energy lead submits the form."""
     settings = get_settings()
     if settings.welcome_sms_body:
         return settings.welcome_sms_body.strip()
@@ -70,6 +70,16 @@ def build_welcome_sms_body() -> str:
         "Thanks for requesting info on solar with Lumi Energy! 🌞 "
         "Someone from our team will be reaching out shortly to answer your questions. "
         "Talk soon!"
+    )
+
+
+def build_lights_welcome_sms_body() -> str:
+    """Stage 0 — instant confirmation when a Lumi Lights lead submits the form."""
+    return (
+        "Thanks for your interest in permanent lighting with Lumi Lights! ✨ "
+        "Our team will be reaching out shortly to learn more about your home "
+        "and answer any questions. Talk soon!\n"
+        "Reply STOP to unsubscribe."
     )
 
 

@@ -1,0 +1,271 @@
+string standalone.update_appointment(Map crmAPIRequest)
+{
+// ==========================================
+// 1. Parse Cal.com webhook
+// ==========================================
+body = crmAPIRequest.get("body").toMap();
+payload = body.get("payload");
+// Only process real bookings
+triggerEvent = body.get("triggerEvent");
+if(triggerEvent != "BOOKING_CREATED" && triggerEvent != "BOOKING_RESCHEDULED" && triggerEvent != "BOOKING_CANCELLED")
+{
+	return "IGNORED: " + triggerEvent;
+}
+// ==========================================
+// 2. Get attendee
+// ==========================================
+attendees = payload.get("attendees");
+if(attendees == null || attendees.isEmpty())
+{
+	return "ERROR: No attendee found";
+}
+attendee = attendees.get(0);
+// ==========================================
+// 3. Get customer email
+// ==========================================
+customerEmail = attendee.get("email");
+if(customerEmail == null || customerEmail == "")
+{
+	return "ERROR: No customer email found";
+}
+info "Customer Email: " + customerEmail;
+// ==========================================
+// 4. Get appointment start time from Cal.com
+// ==========================================
+startTime = payload.get("startTime");
+if(startTime == null || startTime == "")
+{
+	if(triggerEvent != "BOOKING_CANCELLED")
+	{
+		return "ERROR: No appointment start time found";
+	}
+	info "Cancel without start time";
+}
+else
+{
+info "Raw Cal.com Start Time: " + startTime;
+// ==========================================
+// 5. Convert Cal.com UTC → Phoenix
+// ==========================================
+// Remove milliseconds and Z
+utcText = startTime.subString(0,19);
+// Convert ISO format:
+// 2026-08-20T17:00:00
+// into:
+// 20-Aug-2026 17:00:00
+year = utcText.subString(0,4);
+month = utcText.subString(5,7);
+day = utcText.subString(8,10);
+hour = utcText.subString(11,13);
+minute = utcText.subString(14,16);
+second = utcText.subString(17,19);
+monthName = "";
+if(month == "01")
+{
+	monthName = "Jan";
+}
+else if(month == "02")
+{
+	monthName = "Feb";
+}
+else if(month == "03")
+{
+	monthName = "Mar";
+}
+else if(month == "04")
+{
+	monthName = "Apr";
+}
+else if(month == "05")
+{
+	monthName = "May";
+}
+else if(month == "06")
+{
+	monthName = "Jun";
+}
+else if(month == "07")
+{
+	monthName = "Jul";
+}
+else if(month == "08")
+{
+	monthName = "Aug";
+}
+else if(month == "09")
+{
+	monthName = "Sep";
+}
+else if(month == "10")
+{
+	monthName = "Oct";
+}
+else if(month == "11")
+{
+	monthName = "Nov";
+}
+else if(month == "12")
+{
+	monthName = "Dec";
+}
+utcFormatted = day + "-" + monthName + "-" + year + " " + hour + ":" + minute + ":" + second;
+info "UTC formatted: " + utcFormatted;
+// Convert UTC date/time to Unix timestamp
+unixTime = utcFormatted.unixEpoch("UTC");
+info "Unix Time: " + unixTime;
+// Convert Unix timestamp to Phoenix time
+phoenixTime = toDateTimeString(unixTime,"yyyy-MM-dd HH:mm:ss","America/Phoenix");
+info "Phoenix Time: " + phoenixTime;
+// ==========================================
+// 6. Create ISO-8601 value for Zoho CRM
+// ==========================================
+appointmentDateTime = phoenixTime.toDateTime("yyyy-MM-dd HH:mm:ss").toString("yyyy-MM-dd'T'HH:mm:ss-07:00");
+info "Final Zoho DateTime: " + appointmentDateTime;
+}
+// ==========================================
+// 7. Find Lead by email
+// ==========================================
+leads = zoho.crm.searchRecords("Leads","(Email:equals:" + customerEmail + ")");
+info "Matching Leads: " + leads;
+// ==========================================
+// 8. Make sure a Lead was found
+// ==========================================
+if(leads == null || leads.isEmpty())
+{
+	return "ERROR: No Lead found for email: " + customerEmail;
+}
+// ==========================================
+// 9. Get Lead ID
+// ==========================================
+lead = leads.get(0);
+leadId = lead.get("id");
+info "Lead ID: " + leadId;
+// ==========================================
+// 10. Prepare Lead update
+// ==========================================
+updateData = Map();
+if(triggerEvent == "BOOKING_CANCELLED")
+{
+	updateData.put("Appointment_Booked",null);
+	updateData.put("Meet_Link","");
+	updateData.put("Booking_uid","");
+	updateData.put("Lead_Status","Follow-ups");
+	updateResponse = zoho.crm.updateRecord("Leads",leadId,updateData,{"trigger":{"workflow","blueprint","approval"}});
+	info "Zoho cancel response: " + updateResponse;
+	cancelNote = Map();
+	cancelNote.put("Note_Title","Lead cancelled their appointment");
+	cancelNote.put("Note_Content","The customer cancelled this appointment on their own through the booking page.\n\nThis note was added automatically from the booking system notification.");
+	cancelNote.put("Parent_Id",leadId.toString());
+	cancelNote.put("se_module","Leads");
+	cancelNoteResp = zoho.crm.createRecord("Notes",cancelNote);
+	info "Cancel note: " + cancelNoteResp;
+	unit = ifnull(lead.get("Business_unit"),"").toString();
+	if(!unit.toLowerCase().contains("light"))
+	{
+		info "Energy cancel — appointment reminders are Lights only";
+		return "SUCCESS: appointment cancelled";
+	}
+	cancelUrl = "https://arizona-solar-581026638648.us-west4.run.app/webhooks/zoho/lights/book-appointment";
+	cancelPayload = Map();
+	cancelPayload.put("id",leadId.toString());
+	cancelPayload.put("phone",ifnull(lead.get("Phone"),"").toString());
+	cancelPayload.put("email",ifnull(lead.get("Email"),"").toString());
+	cancelPayload.put("first_name",ifnull(lead.get("First_Name"),"").toString());
+	cancelPayload.put("last_name",ifnull(lead.get("Last_Name"),"").toString());
+	cancelPayload.put("appointment_cancelled","true");
+	cancelPayload.put("Business_unit",unit);
+	cancelHeaders = Map();
+	cancelHeaders.put("Content-Type","application/json");
+	cancelHeaders.put("X-Zoho-Webhook-Secret","MigkY4az41qY_RpU2DURPdbQkvgh4CEv");
+	cancelResp = invokeurl
+	[
+		url :cancelUrl
+		type :POST
+		parameters:cancelPayload.toString()
+		headers:cancelHeaders
+		detailed:true
+	];
+	info cancelResp;
+	return "SUCCESS: appointment cancelled";
+}
+// Store appointment date/time
+updateData.put("Appointment_Booked",appointmentDateTime);
+// Move Lead to Appointment Booked bucket
+updateData.put("Lead_Status","Appointment Booked");
+updateData.put("Follow_up_emails_active",false);
+// Cal.com booking id — used for the reschedule link on the confirmation page.
+// Zoho API name is Booking_uid. That field must be Single Line, not Number.
+bookingUid = payload.get("uid");
+if(bookingUid == null || bookingUid == "")
+{
+	bookingUid = payload.get("bookingUid");
+}
+if(bookingUid != null && bookingUid != "")
+{
+	updateData.put("Booking_uid",bookingUid.toString());
+	info "Booking UID: " + bookingUid;
+}
+meetLink = "";
+directUrl = ifnull(payload.get("videoCallUrl"),"").toString();
+if(directUrl.startsWith("http"))
+{
+	meetLink = directUrl;
+}
+if(meetLink == "")
+{
+	metadata = payload.get("metadata");
+	if(metadata != null)
+	{
+		metaUrl = ifnull(metadata.get("videoCallUrl"),"").toString();
+		if(metaUrl.startsWith("http"))
+		{
+			meetLink = metaUrl;
+		}
+	}
+}
+if(meetLink == "")
+{
+	videoCallData = payload.get("videoCallData");
+	if(videoCallData != null)
+	{
+		dataUrl = ifnull(videoCallData.get("url"),"").toString();
+		if(dataUrl.startsWith("http"))
+		{
+			meetLink = dataUrl;
+		}
+	}
+}
+if(meetLink == "")
+{
+	locationValue = ifnull(payload.get("location"),"").toString();
+	if(locationValue.startsWith("http"))
+	{
+		meetLink = locationValue;
+	}
+}
+info "Meet link: " + meetLink;
+if(meetLink != "")
+{
+	updateData.put("Meet_Link",meetLink);
+}
+// ==========================================
+// ==========================================
+// 11. Update Lead (trigger workflows!)
+// ==========================================
+updateResponse = zoho.crm.updateRecord("Leads",leadId,updateData,{"trigger":{"workflow","blueprint","approval"}});
+info "Zoho Update Response: " + updateResponse;
+if(triggerEvent == "BOOKING_RESCHEDULED")
+{
+	rescheduleNote = Map();
+	rescheduleNote.put("Note_Title","Lead rescheduled their appointment");
+	rescheduleNote.put("Note_Content","The customer rescheduled this appointment on their own through the booking page.\n\nNew appointment time: " + appointmentDateTime + "\n\nThis note was added automatically from the booking system notification.");
+	rescheduleNote.put("Parent_Id",leadId.toString());
+	rescheduleNote.put("se_module","Leads");
+	rescheduleNoteResp = zoho.crm.createRecord("Notes",rescheduleNote);
+	info "Reschedule note: " + rescheduleNoteResp;
+}
+// ==========================================
+// 12. Return result
+// ==========================================
+return "SUCCESS: Lead updated successfully";
+}

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
 
     # --- Google Maps (roof satellite snapshot for reports) ---
     google_api_key: str = ""  # Maps Static API (and optional Geocoding)
+    # Image edits for Lights home previews. Set OPENAI_API_KEY in the root .env.
+    openai_api_key: str = ""
+    openai_image_model: str = "gpt-image-2.5-sunburst"
 
     # --- Testing overrides ---
     # When true, ignore phone_no column and always dial TEST_CALL_NUMBER
@@ -150,6 +153,8 @@ class Settings(BaseSettings):
     discord_notifications_enabled: bool = True
     # Channel webhook: Server Settings → Integrations → Webhooks → New Webhook → Copy URL
     discord_webhook_url: str = ""
+    # Separate channel for admin Sales page submits (notes / sale fields)
+    discord_sales_webhook_url: str = ""
 
     # --- Callback retries (scheduled via Cloud Tasks) ---
     callback_enabled: bool = True
@@ -190,6 +195,9 @@ class Settings(BaseSettings):
     nurture_founder_video_url: str = ""
     nurture_website_url: str = "https://lumienergy.us"
     nurture_bill_upload_base_url: str = ""  # falls back to sms_bill_upload_base_url
+    lights_nurture_rep_name: str = "Ivan"
+    lights_company_phone: str = "+1 (480) 828-0861"
+    lights_website_url: str = "https://www.lumilights.us"
 
     # --- Cloud Tasks job backend ---
     # auto = use Cloud Tasks when project/queue/secret/public URL are set

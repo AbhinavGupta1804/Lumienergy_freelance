@@ -28,3 +28,20 @@ body {
     padding-right: max(0px, env(safe-area-inset-right));
   }
 }
+
+/*
+ * Phones with Chrome "Desktop site" (html.force-mobile).
+ * Only apply when the viewport is actually narrow — never break laptop split panes.
+ */
+@media (max-width: 767px) {
+  html.force-mobile [data-desktop-pane] {
+    display: none !important;
+  }
+  html.force-mobile [data-inbox-list] {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  html.force-mobile [data-crm-label] {
+    display: none !important;
+  }
+}

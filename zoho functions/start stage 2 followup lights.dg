@@ -1,0 +1,44 @@
+string button.start_stage2_followup_lights(String leadId)
+{
+lead = zoho.crm.getRecordById("Leads",leadId);
+if(lead == null)
+{
+	return "Lead not found.";
+}
+if(lead.get("Follow_up_emails_active") == true)
+{
+	return "Follow-up texts are already running for this lead.";
+}
+updateMap = Map();
+updateMap.put("Follow_up_emails_active",true);
+zoho.crm.updateRecord("Leads",leadId,updateMap);
+BASE_URL = "https://arizona-solar-581026638648.us-west4.run.app";
+SECRET = "MigkY4az41qY_RpU2DURPdbQkvgh4CEv";
+payload = Map();
+payload.put("id",leadId);
+payload.put("phone",ifnull(lead.get("Phone"),"").toString());
+payload.put("email",ifnull(lead.get("Email"),"").toString());
+payload.put("first_name",ifnull(lead.get("First_Name"),"").toString());
+payload.put("last_name",ifnull(lead.get("Last_Name"),"").toString());
+payload.put("address",ifnull(lead.get("Addressss"),"").toString());
+payload.put("sms_consent",ifnull(lead.get("Sms_consent"),"").toString());
+payload.put("Business_unit",ifnull(lead.get("Business_unit"),"Lumi Lights").toString());
+headers = Map();
+headers.put("Content-Type","application/json");
+headers.put("X-Zoho-Webhook-Secret",SECRET);
+resp = invokeurl
+[
+	url :BASE_URL + "/webhooks/zoho/lights/activate-followup"
+	type :POST
+	parameters:payload.toString()
+	headers:headers
+	detailed:true
+];
+info resp;
+code = ifnull(resp.get("responseCode"),0);
+if(code == 200)
+{
+	return "Lumi Lights follow-up started for this lead.";
+}
+return "Zoho flag set, but Lights SMS activate failed (HTTP " + code + "). Check FastAPI logs.";
+}
